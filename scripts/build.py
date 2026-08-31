@@ -31,6 +31,13 @@ def output(arguments: list[str], cwd: Path | None = None) -> str:
     return subprocess.check_output(arguments, cwd=cwd, text=True).strip()
 
 
+def quiet_output(arguments: list[str], cwd: Path | None = None) -> str:
+    """Capture tool output while hiding harmless binutils diagnostics."""
+    return subprocess.check_output(
+        arguments, cwd=cwd, text=True, stderr=subprocess.DEVNULL
+    ).strip()
+
+
 def platformio_command() -> list[str]:
     executable = shutil.which("pio")
     if executable:
@@ -154,6 +161,9 @@ def link_module(
             "-nostdlib",
             "-nostartfiles",
             "-Wl,--gc-sections",
+            "-Wl,--strip-all",
+            "-Wl,--strip-debug",
+            "-Wl,--strip-discarded",
             "-Wl,--allow-shlib-undefined",
             "-o",
             str(raw),
@@ -171,11 +181,45 @@ def link_module(
         )
 
     shutil.copyfile(raw, destination)
-    run([str(tool(compiler, "strip")), "--strip-unneeded", str(destination)])
-    exports = output([str(tool(compiler, "readelf")), "--dyn-syms", "--wide", str(destination)])
+    strip = tool(compiler, "strip")
+    run(
+        [
+            str(strip),
+            "--strip-unneeded",
+            "--remove-section=.comment",
+            "--remove-section=.got.loc",
+            "--remove-section=.dynamic",
+            "--remove-section=.xt.lit",
+            "--remove-section=.xt.prop",
+            "--remove-section=.xtensa.info",
+            str(destination),
+        ]
+    )
+    readelf = tool(compiler, "readelf")
+    exports = quiet_output(
+        [str(readelf), "--dyn-syms", "--wide", str(destination)]
+    )
     for symbol in ("crosspoint_plugin_abi", "crosspoint_plugin_create"):
         if symbol not in exports:
             raise SystemExit(f"required export is missing from {destination.name}: {symbol}")
+
+    section_table = quiet_output(
+        [str(readelf), "--sections", "--wide", str(destination)]
+    )
+    section_names = set(re.findall(r"\]\s+(\.[^\s]+)", section_table))
+    unsupported = section_names & {
+        ".comment",
+        ".dynamic",
+        ".got.loc",
+        ".xt.lit",
+        ".xt.prop",
+        ".xtensa.info",
+    }
+    if unsupported:
+        raise SystemExit(
+            f"{destination.name} still contains sections that the firmware "
+            f"loader does not place in memory: {', '.join(sorted(unsupported))}"
+        )
 
     elf = destination.read_bytes()
     trailer = struct.pack(
