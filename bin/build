@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+firmware_dir=${CROSSPOINT_FIRMWARE_DIR:-"$project_dir/../crosspoint-reader"}
+
+if [ "$(uname -o 2>/dev/null || true)" = "Android" ]; then
+  exec proot-distro login ubuntu -- bash -lc \
+    "cd '$project_dir' && python3 scripts/build.py --firmware '$firmware_dir' \"\$@\"" \
+    x4-plugins "$@"
+fi
+
+exec python3 "$project_dir/scripts/build.py" --firmware "$firmware_dir" "$@"
