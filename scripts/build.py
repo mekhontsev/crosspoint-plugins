@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 
 
-ABI_VERSION = 1
+ABI_VERSION = 2
 TRAILER_FORMAT = 1
 TRAILER_MAGIC = b"X4PLUG01"
 DEFAULT_ENVIRONMENT = "x4pro-ble-terminal"

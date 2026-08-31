@@ -27,7 +27,7 @@ class BleTerminalActivity final : public Activity {
 
  private:
   static constexpr uint32_t DATA_KEEP_AWAKE_MS = 5000;
-  static constexpr uint32_t TRANSFER_IDLE_MS = 2000;
+  static constexpr uint32_t TRANSFER_IDLE_MS = 5000;
   static constexpr size_t DISPLAY_LINE_BYTES = 256;
   static constexpr size_t FRAME_CACHE_SLOTS = 4;
 
@@ -66,12 +66,19 @@ class BleTerminalActivity final : public Activity {
   bool initialFrameRequested_ = false;
   bool needsReset_ = false;
   bool commandSendFailed_ = false;
+  std::array<char, ble_terminal::MAX_COMMAND_BYTES + 1> pendingCommand_{};
+  size_t pendingCommandLength_ = 0;
+  bool pendingCommandReady_ = false;
+  bool commandKeyboardRequested_ = false;
+  bool commandKeyboardPending_ = false;
   bool followLatest_ = true;
   bool cleanRequestedFrame_ = false;
   bool cleanRefreshPending_ = false;
 
   void formatStatusText(char* buffer, size_t bufferSize) const;
   void openCommandKeyboard();
+  void takeCommandKeyboardResult();
+  void serviceTransport(bool terminalVisible);
   int terminalFontId() const;
   void changeFontSize(int direction);
   void navigateFrame(int direction);

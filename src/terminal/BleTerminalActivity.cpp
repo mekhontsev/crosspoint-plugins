@@ -7,6 +7,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <crosspoint/PluginAbi.h>
 #include <crosspoint/PluginStrings.h>
 #include <esp_memory_utils.h>
 
@@ -20,7 +21,6 @@
 
 #include "MappedInputManager.h"
 #include "TerminalFontIds.h"
-#include "activities/util/KeyboardEntryActivity.h"
 #include "components/HeaderKeyboardButton.h"
 #include "components/UITheme.h"
 
@@ -30,8 +30,9 @@ constexpr size_t DISPLAY_LINE_BYTES = 256;
 constexpr size_t HEADER_CONTROL_COUNT = 4;
 constexpr int HEADER_TITLE_GAP = 20;
 constexpr unsigned long CONTROL_RETRY_MS = 100;
-constexpr unsigned long CONTROL_SETTLE_MS = 250;
+constexpr unsigned long CONNECTION_WAKE_MS = 250;
 constexpr unsigned long LONG_PRESS_MS = 700;
+
 constexpr std::array<int, 9> TERMINAL_FONT_IDS = {
     TERMINAL_MONO_8_FONT_ID,  TERMINAL_MONO_10_FONT_ID, TERMINAL_MONO_12_FONT_ID,
     TERMINAL_MONO_14_FONT_ID, TERMINAL_MONO_16_FONT_ID, TERMINAL_MONO_18_FONT_ID,
@@ -167,6 +168,11 @@ void BleTerminalActivity::onEnter() {
   initialFrameRequested_ = false;
   needsReset_ = false;
   commandSendFailed_ = false;
+  pendingCommandLength_ = 0;
+  pendingCommand_[0] = '\0';
+  pendingCommandReady_ = false;
+  commandKeyboardRequested_ = false;
+  commandKeyboardPending_ = false;
   followLatest_ = true;
   cleanRequestedFrame_ = false;
   cleanRefreshPending_ = false;
@@ -270,30 +276,44 @@ bool BleTerminalActivity::cacheCommittedFrame() {
 }
 
 void BleTerminalActivity::openCommandKeyboard() {
+  if (commandKeyboardPending_) return;
   const size_t maxLength = transport_.maxCommandBytes();
   if (maxLength == 0) return;
 
   commandSendFailed_ = false;
-  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(
-      renderer, mappedInput, crosspoint_plugin_strings::TERMINAL_COMMAND, "", maxLength, InputType::Text,
-      /*showHeaderKeyboardToggle=*/true,
-      /*enableSystemLanguageSwitch=*/true);
-  if (!keyboard) {
-    LOG_ERR("BLE_TERM", "Unable to allocate command keyboard");
+  pendingCommandLength_ = 0;
+  pendingCommand_[0] = '\0';
+  const uint32_t flags =
+      crosspoint_plugin::KEYBOARD_FLAG_HEADER_TOGGLE | crosspoint_plugin::KEYBOARD_FLAG_SYSTEM_LANGUAGE;
+  commandKeyboardPending_ = crosspoint_plugin_open_text_keyboard_v2(crosspoint_plugin_strings::TERMINAL_COMMAND,
+                                                                    std::min(maxLength, pendingCommand_.size() - 1),
+                                                                    flags, &renderer, &mappedInput);
+  if (!commandKeyboardPending_) {
+    LOG_ERR("BLE_TERM", "Firmware keyboard could not be opened");
+    commandSendFailed_ = true;
+    requestUpdate();
+  }
+}
+
+void BleTerminalActivity::takeCommandKeyboardResult() {
+  size_t length = 0;
+  uint8_t cancelled = false;
+  if (!crosspoint_plugin_take_text_keyboard_result_v2(pendingCommand_.data(), pendingCommand_.size(), &length,
+                                                      &cancelled)) {
     return;
   }
-  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
-    if (result.isCancelled) return;
-    const auto* keyboardResult = std::get_if<KeyboardResult>(&result.data);
-    if (!keyboardResult) return;
-
-    const bool sent = keyboardResult->text.empty() ? transport_.sendAction(ble_terminal::Action::SUBMIT_INPUT)
-                                                   : transport_.sendCommand(keyboardResult->text);
-    if (!sent) {
-      commandSendFailed_ = true;
-      requestUpdate();
-    }
-  });
+  commandKeyboardPending_ = false;
+  initialFrameRequested_ = false;
+  nextControlAttemptAt_ = 0;
+  if (cancelled) {
+    pendingCommandLength_ = 0;
+    pendingCommand_[0] = '\0';
+    requestUpdate();
+    return;
+  }
+  pendingCommandLength_ = std::min(length, pendingCommand_.size() - 1);
+  pendingCommand_[pendingCommandLength_] = '\0';
+  pendingCommandReady_ = true;
 }
 
 int BleTerminalActivity::terminalFontId() const { return TERMINAL_FONT_IDS[fontSizeIndex_]; }
@@ -324,6 +344,12 @@ void BleTerminalActivity::queueViewportGeometry() {
 
 void BleTerminalActivity::queueFrameRequest(const ble_terminal::FrameRequest request, const uint32_t anchorFrameId,
                                             const bool cleanRefresh) {
+  const unsigned long now = millis();
+  const bool connectionWasIdle =
+      lastTransferActivityAt_ == 0 && transport_.status() == ble_terminal::BleTerminalTransport::Status::CONNECTED;
+  lastTransferActivityAt_ = now;
+  transport_.setTransferActive(true);
+  if (connectionWasIdle) nextControlAttemptAt_ = now + CONNECTION_WAKE_MS;
   pendingFrameRequest_ = request;
   pendingRequestAnchor_ = anchorFrameId;
   hasPendingRequest_ = true;
@@ -346,7 +372,7 @@ void BleTerminalActivity::trySendPendingControl() {
     sent = transport_.sendFrameRequest(pendingFrameRequest_, pendingRequestAnchor_);
     if (sent) hasPendingRequest_ = false;
   }
-  nextControlAttemptAt_ = now + (sent ? CONTROL_SETTLE_MS : CONTROL_RETRY_MS);
+  nextControlAttemptAt_ = sent ? now : now + CONTROL_RETRY_MS;
 }
 
 void BleTerminalActivity::navigateFrame(const int direction) {
@@ -406,6 +432,33 @@ void BleTerminalActivity::jumpToLatest() {
 }
 
 void BleTerminalActivity::loop() {
+  if (commandKeyboardPending_) takeCommandKeyboardResult();
+
+  if (commandKeyboardRequested_) {
+    serviceTransport(false);
+    commandKeyboardRequested_ = false;
+    openCommandKeyboard();
+    return;
+  }
+
+  if (pendingCommandReady_) {
+    // The keyboard can cover the terminal while a frame is arriving. Drain
+    // and acknowledge that frame without repainting it, then submit the
+    // command over the still-open BLE connection. The next normal loop asks
+    // for a fresh screen containing the command's result.
+    serviceTransport(false);
+    if (!transport_.readyToSend()) return;
+    const bool sent = pendingCommandLength_ == 0
+                          ? transport_.sendAction(ble_terminal::Action::SUBMIT_INPUT)
+                          : crosspoint_plugin_send_terminal_command_v2(pendingCommand_.data(), pendingCommandLength_);
+    pendingCommandLength_ = 0;
+    pendingCommand_[0] = '\0';
+    pendingCommandReady_ = false;
+    commandSendFailed_ = !sent;
+    requestUpdate();
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     LOG_INF("BLE_TERM", "Back requested: stopping transport before Home");
     transport_.stop();
@@ -419,7 +472,7 @@ void BleTerminalActivity::loop() {
     const Rect keyboardButton =
         header_keyboard_button::layout(renderer, metrics, title, 0, HEADER_CONTROL_COUNT, HEADER_TITLE_GAP);
     if (mappedInput.wasTapInRect(keyboardButton.x, keyboardButton.y, keyboardButton.width, keyboardButton.height)) {
-      if (transport_.readyToSend()) openCommandKeyboard();
+      commandKeyboardRequested_ = true;
       return;
     }
 
@@ -467,7 +520,18 @@ void BleTerminalActivity::loop() {
     navigateFrame(1);
   }
 
+  serviceTransport(true);
+}
+
+void BleTerminalActivity::serviceTransport(const bool terminalVisible) {
   const unsigned long now = millis();
+  if (!terminalVisible && readyAfterRenderFrameId_ != 0) {
+    pendingStatusFrameId_ = readyAfterRenderFrameId_;
+    pendingFrameStatus_ = ble_terminal::FrameStatus::READY;
+    hasPendingStatus_ = true;
+    readyAfterRenderFrameId_ = 0;
+  }
+
   ble_terminal::BleTerminalTransport::IncomingPacket packet;
   while (transport_.poll(packet)) {
     if (!frameMutex_ || xSemaphoreTake(frameMutex_, portMAX_DELAY) != pdTRUE) continue;
@@ -497,7 +561,7 @@ void BleTerminalActivity::loop() {
       transport_.setTransferActive(true);
     }
     if (result == ble_terminal::AcceptResult::FRAME_COMMITTED) {
-      if (presentFrame) {
+      if (presentFrame && terminalVisible) {
         readyAfterRenderFrameId_ = frameId;
         requestUpdate();
       } else {
@@ -509,7 +573,7 @@ void BleTerminalActivity::loop() {
       pendingStatusFrameId_ = frameId;
       pendingFrameStatus_ = ble_terminal::FrameStatus::RETRY;
       hasPendingStatus_ = true;
-      requestUpdate();
+      if (terminalVisible) requestUpdate();
     }
   }
 
@@ -523,14 +587,14 @@ void BleTerminalActivity::loop() {
     } else {
       initialFrameRequested_ = false;
     }
-    if (selectedSlot_ < 0 || status == ble_terminal::BleTerminalTransport::Status::PAIRING ||
-        status == ble_terminal::BleTerminalTransport::Status::ERROR) {
+    if (terminalVisible && (selectedSlot_ < 0 || status == ble_terminal::BleTerminalTransport::Status::PAIRING ||
+                            status == ble_terminal::BleTerminalTransport::Status::ERROR)) {
       requestUpdate();
     }
   }
 
-  if (!initialFrameRequested_ && transport_.status() == ble_terminal::BleTerminalTransport::Status::CONNECTED &&
-      transport_.readyToSend()) {
+  if (!pendingCommandReady_ && !initialFrameRequested_ &&
+      transport_.status() == ble_terminal::BleTerminalTransport::Status::CONNECTED && transport_.readyToSend()) {
     initialFrameRequested_ = true;
     queueViewportGeometry();
     queueFrameRequest(ble_terminal::FrameRequest::CURRENT, selectedFrameId());
@@ -544,7 +608,8 @@ void BleTerminalActivity::loop() {
 }
 
 bool BleTerminalActivity::preventAutoSleep() {
-  return lastPacketAt_ != 0 && millis() - lastPacketAt_ < DATA_KEEP_AWAKE_MS;
+  return commandKeyboardRequested_ || commandKeyboardPending_ || pendingCommandReady_ ||
+         (lastPacketAt_ != 0 && millis() - lastPacketAt_ < DATA_KEEP_AWAKE_MS);
 }
 
 bool BleTerminalActivity::handleHomeGesture() {
