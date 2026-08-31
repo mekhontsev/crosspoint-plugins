@@ -21,6 +21,7 @@ ABI_VERSION = 1
 TRAILER_FORMAT = 1
 TRAILER_MAGIC = b"X4PLUG01"
 DEFAULT_ENVIRONMENT = "x4pro-ble-terminal"
+LINKER_SCRIPT = Path(__file__).resolve().parents[1] / "linker" / "plugin_sections.ld"
 
 
 def run(arguments: list[str], cwd: Path | None = None) -> None:
@@ -165,6 +166,7 @@ def link_module(
             "-Wl,--strip-debug",
             "-Wl,--strip-discarded",
             "-Wl,--allow-shlib-undefined",
+            f"-Wl,-T,{LINKER_SCRIPT}",
             "-o",
             str(raw),
             *(str(item) for item in objects),
@@ -219,6 +221,24 @@ def link_module(
         raise SystemExit(
             f"{destination.name} still contains sections that the firmware "
             f"loader does not place in memory: {', '.join(sorted(unsupported))}"
+        )
+
+    section_sizes = {
+        match.group(1): int(match.group(2), 16)
+        for match in re.finditer(
+            r"\]\s+(\.[^\s]+)\s+\S+\s+\S+\s+\S+\s+([0-9a-fA-F]+)",
+            section_table,
+        )
+    }
+    misaligned = [
+        name
+        for name in (".data", ".rodata", ".data.rel.ro")
+        if section_sizes.get(name, 0) % 4 != 0
+    ]
+    if misaligned:
+        raise SystemExit(
+            f"{destination.name} has sections whose sizes break the firmware "
+            f"loader's four-byte runtime alignment: {', '.join(misaligned)}"
         )
 
     elf = destination.read_bytes()
