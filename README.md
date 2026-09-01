@@ -1,13 +1,46 @@
 # CrossPoint Plugins
 
-SD-loaded plugins for the Xteink X4 Pro build of CrossPoint Reader. This
-repository is intentionally separate from the firmware fork: firmware and
-plugins build independently and are distributed as separate artifacts.
+SD-loaded plugins for the experimental Xteink X4 Pro fork of CrossPoint
+Reader. This repository is intentionally separate from the firmware: plugins
+build independently and can be updated without reflashing the reader.
+
+The complete system consists of:
+
+- [`crosspoint-reader`](https://github.com/mekhontsev/crosspoint-reader) — the
+  firmware fork and plugin host;
+- this repository — the plugin sources and SD-card bundle;
+- [`x4-terminal-bridge`](https://github.com/mekhontsev/x4-terminal-bridge) —
+  the Android/Termux BLE bridge.
+
+See the firmware fork's
+[X4 Terminal user guide](https://github.com/mekhontsev/crosspoint-reader/blob/main/docs/x4-terminal-user-guide.md)
+for installation, controls, recovery, and current limitations. This software
+is experimental, supports the **Xteink X4 Pro only**, and is not an official
+CrossPoint or Xteink release.
 
 The current bundle contains:
 
 - `manager.so` — the lazily loaded **Plugins** menu;
 - `terminal.so` — the Bluetooth tmux terminal and its IBM Plex Mono fonts.
+
+The current source version is **0.2.0** and uses plugin ABI **3**. A plugin is
+accepted only when its ABI matches the installed firmware host.
+
+## Install
+
+For the first installation, extract `crosspoint-plugins.zip` into the root of
+the reader's SD card. It creates:
+
+```text
+/plugins/manager.so
+/plugins/terminal.so
+/plugins/bundle.json
+```
+
+Once a compatible manager is installed, child plugins can also be updated over
+BLE: select the ZIP in X4 Terminal Bridge, then choose **Plugins > Install via
+Bluetooth** on the reader. `manager.so` deliberately remains an SD-card update
+so the updater cannot replace itself during a transfer.
 
 ## Build
 
@@ -25,14 +58,7 @@ or links a firmware image. All module `.cpp` files are owned by this repository;
 the firmware checkout supplies headers, the compiler configuration, and the
 host ABI manifest only.
 
-The result is `build/crosspoint-plugins.zip`. Extract it into the root of the
-reader's SD card; this creates:
-
-```text
-/plugins/manager.so
-/plugins/terminal.so
-/plugins/bundle.json
-```
+The result is `build/crosspoint-plugins.zip`.
 
 Every `.so` carries its ABI version, ELF length, and SHA-256 digest. The loader
 requires a matching ABI and valid digest, so plugins can work across compatible
@@ -43,9 +69,6 @@ The manager discovers child `.so` files dynamically from their embedded title,
 version, and ordering metadata. The firmware reads this metadata without loading
 or executing the plugin, and the manager does not contain a catalog of plugin
 names.
-Choose **Install via Bluetooth** to install the updatable child modules from a
-local bundle selected in a compatible client. `manager.so` is deliberately not
-replaceable over Bluetooth; update it by copying a new bundle to the SD card.
 
 ## Licensing
 
