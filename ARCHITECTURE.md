@@ -1,98 +1,65 @@
 # Plugin Architecture
 
-The plugin system keeps the experimental X4 Pro work separate from the
-CrossPoint Reader application code. The firmware fork supplies a small generic
-host, while independently built SD-card modules supply the Plugins menu and its
-activities.
-
-## System boundary
+The firmware fork supplies a small stable host. SD modules own plugin UI and
+application protocols.
 
 ```text
-upstream CrossPoint Reader
-          │
-          │ small, mergeable fork delta
-          ▼
-firmware: Plugins entry + loader + host ABI + BLE transport
-          │
-          │ lazy native loading from /plugins
-          ▼
-manager.so ── discovers child metadata ──> terminal.so, future child .so files
-          ▲
-          │ authenticated PageWire Protocol
-          │
-PageWire client ── validates crosspoint-plugins.zip
+CrossPoint firmware
+  Plugins entry + ELF loader + ABI4 services + raw authenticated BLE
+      -> /plugins/manager.so (loaded when Plugins opens)
+          -> metadata discovery
+          -> /plugins/terminal.so and future child modules (loaded on selection)
 ```
 
-The firmware does not contain a catalog of plugin names or UI strings. It knows
-only the fixed manager path, `/plugins/manager.so`, and a versioned host ABI.
-The manager discovers child `.so` files dynamically from metadata embedded in
-their ELF images.
+The firmware knows only `/plugins/manager.so`, the ABI, integrity format, and
+host services. It contains no child names, child strings, PageWire magic or
+opcodes, terminal document state, layout, or fonts.
 
-## Lazy lifecycle
+## Lifecycle and memory
 
-No plugin code runs during boot. Selecting **Plugins** loads `manager.so` from
-the SD card. The firmware can read child titles, versions, and ordering metadata
-without relocating or executing those modules. A child is loaded only after its
-row is selected. Back unloads the child; leaving Plugins unloads the manager.
+No plugin code runs during boot. Selecting **Plugins** loads `manager.so`.
+Metadata for child rows is read without executing the child. Selecting a row
+loads that `.so`; Back unloads it, and leaving Plugins unloads manager.
 
-Terminal therefore allocates its activity, fonts, frame cache, and BLE state
-only while **Plugins > Terminal** is open. Ordinary reading and the rest of the
-upstream UI do not pass through plugin code.
+Terminal's PageWire parser, two fixed 12 KiB buffers, fonts, and UI therefore
+exist only while Terminal is active. The ordinary book reader and the rest of
+upstream CrossPoint never pass through plugin code.
 
 ## Independent updates
 
-| Component | Update path | Requires firmware rebuild |
+| Component | Update path | Firmware flash |
 |---|---|---|
-| Firmware host and plugin ABI | Normal X4 Pro firmware update | Yes |
-| `manager.so` | SD card or Wi-Fi file transfer | No |
-| Child plugins such as `terminal.so` | SD card, Wi-Fi, or authenticated BLE | No |
-| PageWire client | Normal application update | No |
+| Host/ABI/generic BLE | X4 Pro firmware update | Required |
+| `manager.so` | SD card or Wi-Fi | No |
+| Child `.so` modules | SD, Wi-Fi, or authenticated BLE | No |
+| PageWire companion | APK/helper update | No |
 
-The first manager installation must be copied to `/plugins/manager.so`. Once it
-is present, **Install via Bluetooth** accepts compatible child modules from
-PageWire. The updater creates `/plugins` if necessary, but deliberately
-cannot replace `manager.so` while that manager is running.
+The ZIP manifest describes child names, ABI, lengths, SHA-256 values, and update
+policy. Android validates it, then manager streams eligible children directly
+to `/plugins`. The reader independently validates the final file, embedded
+trailer, ABI, ELF structure, and descriptor. An interrupted child transfer may
+leave that child unavailable but cannot replace manager, firmware, OTA state,
+partition table, bootloader, or recovery path.
 
-Each build produces a ZIP manifest containing the bundle version, plugin ABI,
-module sizes, SHA-256 digests, and BLE-update policy. PageWire validates
-the manifest before transfer. The reader then independently validates the
-received size and digest, embedded trailer, ABI, ELF structure, and plugin
-metadata before listing or loading the module. An interrupted direct transfer
-may leave that child unavailable, but it does not touch the manager, firmware,
-OTA state, partition table, bootloader, or recovery path; retransferring or
-copying the child restores it.
+## Generic BLE boundary
 
-## Failure and recovery model
+ABI4 exposes one authenticated raw packet service: lifecycle, connection and
+pairing status, packet polling/sending, queue backpressure, maximum packet size,
+drop counters, and active/idle link parameters. Packet contents belong entirely
+to the active plugin. Terminal and manager happen to use PageWire v5, but a
+future plugin may implement another bounded protocol without changing firmware.
 
-Plugins are native code, not isolated processes. A defective plugin can crash
-its activity and cause the firmware watchdog or crash handler to restart the
-reader. This is not treated as a brick: plugins are absent from the boot path,
-the normal firmware starts again within seconds, and removing the offending
-`.so` prevents it from being selected again.
+## Failure model
 
-The host ABI exposes a deliberately small symbol allow-list, and the build
-rejects unresolved calls outside it. Plugin installation is confined to child
-files below `/plugins`. These boundaries prevent ordinary plugin and transfer
-failures from modifying persistent firmware or boot state.
+Plugins are native code, not isolated processes. A defective plugin may crash
+its activity and restart the reader. Plugins are absent from the boot path, so
+normal firmware starts again and removing the offending `.so` prevents another
+selection. This is failure containment, not a sandbox against malicious native
+code.
 
-This design is failure containment, not a security sandbox. A deliberately
-malicious native module or arbitrary memory-corruption exploit is outside the
-guarantee. Only install bundles from a trusted source.
+Compatibility is based on explicit ABI4, not a firmware build ID. Compatible
+host changes do not invalidate modules. An incompatible host change increments
+the ABI so old modules are rejected before execution.
 
-## Upstream maintenance
-
-The fork changes only the code needed to expose **Plugins**, validate/load
-modules, provide the host ABI, and activate the shared BLE transport on demand.
-Plugin activities, fonts, menu strings, package manifests, and build tooling
-remain in this repository. Keeping that boundary narrow reduces conflicts when
-merging later upstream CrossPoint changes and avoids reflashing the X4 Pro for
-normal plugin development.
-
-Compatibility is based on the explicit plugin ABI, not a firmware build ID.
-Firmware changes that preserve ABI 3 can continue using the same modules. An
-incompatible future host increments the ABI so old modules are rejected before
-execution.
-
-The concrete author-facing contract, including the firmware service allow-list
-and shared BLE/PageWire transport, is documented in
-[Plugin Development](PLUGIN_DEVELOPMENT.md).
+The narrow host boundary reduces conflicts when merging upstream CrossPoint.
+See [Plugin Development](PLUGIN_DEVELOPMENT.md) for the author contract.

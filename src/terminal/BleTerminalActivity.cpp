@@ -17,7 +17,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <utility>
 
 #include "MappedInputManager.h"
 #include "TerminalFontIds.h"
@@ -26,7 +25,6 @@
 
 namespace {
 
-constexpr size_t DISPLAY_LINE_BYTES = 256;
 constexpr size_t HEADER_CONTROL_COUNT = 4;
 constexpr int HEADER_TITLE_GAP = 20;
 constexpr unsigned long CONTROL_RETRY_MS = 100;
@@ -40,13 +38,10 @@ constexpr std::array<int, 9> TERMINAL_FONT_IDS = {
 };
 
 struct VisualLine {
-  size_t contentEnd = 0;
   size_t nextStart = 0;
 };
 
 bool isUtf8Continuation(const char value) { return (static_cast<uint8_t>(value) & 0xC0U) == 0x80U; }
-
-bool frameIdBefore(const uint32_t first, const uint32_t second) { return static_cast<int32_t>(first - second) < 0; }
 
 bool pointInRect(const int x, const int y, const Rect& rect) {
   return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
@@ -68,8 +63,9 @@ void drawRefreshButton(const GfxRenderer& renderer, const Rect& button, const bo
   if (history) renderer.fillRect(button.x + button.width - 7, button.y + 4, 4, 4);
 }
 
-VisualLine prepareVisualLine(const GfxRenderer& renderer, const int fontId, const char* source, const size_t textLength,
-                             const size_t start, const int maxWidth, std::array<char, DISPLAY_LINE_BYTES>& line) {
+VisualLine prepareVisualLine(const GfxRenderer& renderer, const int fontId, const char* source,
+                             const size_t textLength, const size_t start, const int maxWidth,
+                             std::array<char, 256>& line) {
   size_t logicalEnd = start;
   while (logicalEnd < textLength && source[logicalEnd] != '\n') ++logicalEnd;
 
@@ -78,15 +74,15 @@ VisualLine prepareVisualLine(const GfxRenderer& renderer, const int fontId, cons
   while (length > 0 && start + length < logicalEnd && isUtf8Continuation(source[start + length])) --length;
 
   std::memcpy(line.data(), source + start, length);
-  for (size_t i = 0; i < length; ++i) {
-    if (line[i] == '\t') line[i] = ' ';
+  for (size_t index = 0; index < length; ++index) {
+    if (line[index] == '\t') line[index] = ' ';
   }
   line[length] = '\0';
 
   while (length > 0 && renderer.getTextWidth(fontId, line.data()) > maxWidth) {
-    size_t newLength = length - 1;
-    while (newLength > 0 && isUtf8Continuation(line[newLength])) --newLength;
-    length = newLength;
+    size_t nextLength = length - 1;
+    while (nextLength > 0 && isUtf8Continuation(line[nextLength])) --nextLength;
+    length = nextLength;
     line[length] = '\0';
   }
 
@@ -99,9 +95,8 @@ VisualLine prepareVisualLine(const GfxRenderer& renderer, const int fontId, cons
   }
 
   VisualLine result;
-  result.contentEnd = start + length;
   if (length < available) {
-    result.nextStart = result.contentEnd;
+    result.nextStart = start + length;
   } else if (logicalEnd < textLength) {
     result.nextStart = logicalEnd + 1;
   } else {
@@ -111,10 +106,10 @@ VisualLine prepareVisualLine(const GfxRenderer& renderer, const int fontId, cons
 }
 
 size_t countVisualLines(const GfxRenderer& renderer, const int fontId, const char* text, const size_t textLength,
-                        const int maxWidth, std::array<char, DISPLAY_LINE_BYTES>& line) {
+                        const int maxWidth, std::array<char, 256>& line) {
   size_t count = 0;
   size_t cursor = 0;
-  while (cursor <= textLength) {
+  while (cursor < textLength) {
     cursor = prepareVisualLine(renderer, fontId, text, textLength, cursor, maxWidth, line).nextStart;
     ++count;
   }
@@ -122,10 +117,11 @@ size_t countVisualLines(const GfxRenderer& renderer, const int fontId, const cha
 }
 
 size_t visualLineStart(const GfxRenderer& renderer, const int fontId, const char* text, const size_t textLength,
-                       const int maxWidth, const size_t targetIndex, std::array<char, DISPLAY_LINE_BYTES>& line) {
+                       const int maxWidth, const size_t targetIndex,
+                       std::array<char, 256>& line) {
   size_t index = 0;
   size_t cursor = 0;
-  while (cursor <= textLength && index < targetIndex) {
+  while (cursor < textLength && index < targetIndex) {
     cursor = prepareVisualLine(renderer, fontId, text, textLength, cursor, maxWidth, line).nextStart;
     ++index;
   }
@@ -140,9 +136,9 @@ void releaseTerminalPluginFonts(GfxRenderer& renderer);
 
 BleTerminalActivity::BleTerminalActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("BleTerminal", renderer, mappedInput),
-      transport_(ble_terminal::sharedTransport()),
-      receiver_(stagingFrame_.data(), stagingFrame_.size()),
-      frameMutex_(xSemaphoreCreateMutexStatic(&frameMutexStorage_)) {}
+      transport_(pagewire::sharedPageWireTransport()),
+      receiver_(stagingDocument_.data(), DOCUMENT_CAPACITY_BYTES),
+      documentMutex_(xSemaphoreCreateMutexStatic(&documentMutexStorage_)) {}
 
 BleTerminalActivity::~BleTerminalActivity() {
 #if defined(CROSSPOINT_PLUGIN_BUILD) && CROSSPOINT_PLUGIN_BUILD
@@ -152,20 +148,22 @@ BleTerminalActivity::~BleTerminalActivity() {
 
 void BleTerminalActivity::onEnter() {
   Activity::onEnter();
-
   transport_.start();
   observedStatusRevision_ = transport_.statusRevision();
-  pendingStatusFrameId_ = 0;
+  pendingStatusGeneration_ = 0;
+  pendingStatusRevision_ = 0;
+  pendingRequestGeneration_ = 0;
+  pendingRequestRevision_ = 0;
   pendingRequestAnchor_ = 0;
-  readyAfterRenderFrameId_ = 0;
+  readyAfterRenderGeneration_ = 0;
+  readyAfterRenderRevision_ = 0;
   lastPacketAt_ = 0;
   lastTransferActivityAt_ = 0;
   nextControlAttemptAt_ = 0;
-  selectedSlot_ = -1;
   hasPendingStatus_ = false;
   hasPendingRequest_ = false;
-  hasPendingViewport_ = false;
-  initialFrameRequested_ = false;
+  helloPending_ = false;
+  initialDocumentRequested_ = false;
   needsReset_ = false;
   commandSendFailed_ = false;
   pendingCommandLength_ = 0;
@@ -173,106 +171,41 @@ void BleTerminalActivity::onEnter() {
   pendingCommandReady_ = false;
   commandKeyboardRequested_ = false;
   commandKeyboardPending_ = false;
+  pendingNavigation_ = 0;
   followLatest_ = true;
-  cleanRequestedFrame_ = false;
   cleanRefreshPending_ = false;
   receiver_.clear();
-  clearFrameCache();
-  LOG_INF("BLE_TERM",
-          "Frame cache: %u slots x %u bytes plus staging in %s; free heap=%u, "
-          "PSRAM=%u",
-          static_cast<unsigned>(FRAME_CACHE_SLOTS), static_cast<unsigned>(ble_terminal::MAX_FRAME_BYTES),
-          esp_ptr_external_ram(frames_.data()) ? "PSRAM" : "internal RAM", static_cast<unsigned>(ESP.getFreeHeap()),
+  clearDocument();
+  LOG_INF("PAGEWIRE", "Document buffers: 2 x %u bytes in %s; free heap=%u, PSRAM=%u",
+          static_cast<unsigned>(DOCUMENT_CAPACITY_BYTES),
+          esp_ptr_external_ram(document_.data()) ? "PSRAM" : "internal RAM", static_cast<unsigned>(ESP.getFreeHeap()),
           static_cast<unsigned>(ESP.getFreePsram()));
   requestUpdate();
 }
 
 void BleTerminalActivity::onExit() {
-  LOG_INF("BLE_TERM", "Terminal activity exit: stopping transport");
+  LOG_INF("PAGEWIRE", "Terminal exit: stopping plugin BLE");
   transport_.stop();
-  if (frameMutex_ && xSemaphoreTake(frameMutex_, portMAX_DELAY) == pdTRUE) {
+  if (documentMutex_ && xSemaphoreTake(documentMutex_, portMAX_DELAY) == pdTRUE) {
     receiver_.clear();
-    clearFrameCache();
-    xSemaphoreGive(frameMutex_);
+    clearDocument();
+    xSemaphoreGive(documentMutex_);
   }
-  LOG_INF("BLE_TERM", "Terminal activity exit: transport stopped");
   Activity::onExit();
 }
 
-void BleTerminalActivity::clearFrameCache() {
-  for (auto& frame : frames_) {
-    frame.id = 0;
-    frame.length = 0;
-    frame.occupied = false;
-    frame.latest = false;
-    frame.text[0] = '\0';
-  }
-  selectedSlot_ = -1;
+void BleTerminalActivity::clearDocument() {
+  generation_ = 0;
+  revision_ = 0;
+  windowStart_ = 0;
+  documentLength_ = 0;
+  documentBytes_ = 0;
+  viewStart_ = 0;
+  viewEnd_ = 0;
+  document_[0] = '\0';
+  receiver_.setBase(document_.data(), 0, 0, 0);
   followLatest_ = true;
-}
-
-int BleTerminalActivity::findFrameSlot(const uint32_t frameId) const {
-  for (size_t index = 0; index < frames_.size(); ++index) {
-    if (frames_[index].occupied && frames_[index].id == frameId) return static_cast<int>(index);
-  }
-  return -1;
-}
-
-int BleTerminalActivity::chooseFrameSlot(const uint32_t frameId) const {
-  for (size_t index = 0; index < frames_.size(); ++index) {
-    if (!frames_[index].occupied) return static_cast<int>(index);
-  }
-
-  int candidate = -1;
-  for (size_t index = 0; index < frames_.size(); ++index) {
-    if (static_cast<int>(index) == selectedSlot_) continue;
-    if (candidate < 0) {
-      candidate = static_cast<int>(index);
-      continue;
-    }
-
-    const bool incomingIsNewer = selectedSlot_ < 0 || frameIdBefore(frames_[selectedSlot_].id, frameId);
-    if ((incomingIsNewer && frameIdBefore(frames_[index].id, frames_[candidate].id)) ||
-        (!incomingIsNewer && frameIdBefore(frames_[candidate].id, frames_[index].id))) {
-      candidate = static_cast<int>(index);
-    }
-  }
-  return candidate >= 0 ? candidate : 0;
-}
-
-uint32_t BleTerminalActivity::selectedFrameId() const {
-  return selectedSlot_ >= 0 && frames_[selectedSlot_].occupied ? frames_[selectedSlot_].id : 0;
-}
-
-bool BleTerminalActivity::cacheCommittedFrame() {
-  const uint8_t flags = receiver_.frameFlags();
-  if ((flags & ble_terminal::FRAME_FLAG_RESET_CACHE) != 0) clearFrameCache();
-
-  int slot = findFrameSlot(receiver_.frameId());
-  if (slot < 0) slot = chooseFrameSlot(receiver_.frameId());
-  if (slot < 0) return false;
-
-  if ((flags & ble_terminal::FRAME_FLAG_LATEST) != 0) {
-    for (auto& frame : frames_) frame.latest = false;
-  }
-
-  CachedFrame& frame = frames_[slot];
-  frame.id = receiver_.frameId();
-  frame.length = receiver_.frameLength();
-  frame.occupied = true;
-  frame.latest = (flags & ble_terminal::FRAME_FLAG_LATEST) != 0;
-  std::memcpy(frame.text.data(), receiver_.frameText(), frame.length + 1);
-
-  const bool explicitlyPresented = (flags & ble_terminal::FRAME_FLAG_PRESENT) != 0;
-  const bool shouldPresent = selectedSlot_ < 0 || explicitlyPresented || (frame.latest && followLatest_);
-  if (shouldPresent) {
-    selectedSlot_ = static_cast<int8_t>(slot);
-    followLatest_ = frame.latest;
-    if (explicitlyPresented && cleanRequestedFrame_) cleanRefreshPending_ = true;
-    if (explicitlyPresented) cleanRequestedFrame_ = false;
-  }
-  needsReset_ = false;
-  return shouldPresent;
+  latestDocument_ = false;
 }
 
 void BleTerminalActivity::openCommandKeyboard() {
@@ -289,7 +222,7 @@ void BleTerminalActivity::openCommandKeyboard() {
                                                                     std::min(maxLength, pendingCommand_.size() - 1),
                                                                     flags, &renderer, &mappedInput);
   if (!commandKeyboardPending_) {
-    LOG_ERR("BLE_TERM", "Firmware keyboard could not be opened");
+    LOG_ERR("PAGEWIRE", "Firmware keyboard could not be opened");
     commandSendFailed_ = true;
     requestUpdate();
   }
@@ -303,7 +236,7 @@ void BleTerminalActivity::takeCommandKeyboardResult() {
     return;
   }
   commandKeyboardPending_ = false;
-  initialFrameRequested_ = false;
+  initialDocumentRequested_ = false;
   nextControlAttemptAt_ = 0;
   if (cancelled) {
     pendingCommandLength_ = 0;
@@ -318,42 +251,71 @@ void BleTerminalActivity::takeCommandKeyboardResult() {
 
 int BleTerminalActivity::terminalFontId() const { return TERMINAL_FONT_IDS[fontSizeIndex_]; }
 
+int BleTerminalActivity::bodyWidth() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return renderer.getScreenWidth() - 2 * metrics.contentSidePadding;
+}
+
+int BleTerminalActivity::visibleLineCount() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int top = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int height = renderer.getScreenHeight() - top - metrics.buttonHintsHeight;
+  const int lineHeight = renderer.getLineHeight(terminalFontId());
+  return lineHeight > 0 ? std::max(0, height / lineHeight) : 0;
+}
+
+size_t BleTerminalActivity::pageStartEndingAt(const size_t end) {
+  const size_t boundedEnd = std::min(end, documentBytes_);
+  const size_t lines = countVisualLines(renderer, terminalFontId(), document_.data(), boundedEnd, bodyWidth(),
+                                        displayLine_);
+  const size_t visible = static_cast<size_t>(visibleLineCount());
+  return visualLineStart(renderer, terminalFontId(), document_.data(), boundedEnd, bodyWidth(),
+                         lines > visible ? lines - visible : 0, displayLine_);
+}
+
+size_t BleTerminalActivity::pageEndStartingAt(const size_t start) {
+  size_t cursor = std::min(start, documentBytes_);
+  const int lines = visibleLineCount();
+  for (int line = 0; line < lines && cursor < documentBytes_; ++line) {
+    cursor = prepareVisualLine(renderer, terminalFontId(), document_.data(), documentBytes_, cursor, bodyWidth(),
+                               displayLine_)
+                 .nextStart;
+  }
+  return std::min(cursor, documentBytes_);
+}
+
 void BleTerminalActivity::changeFontSize(const int direction) {
   const int nextIndex =
       std::clamp(static_cast<int>(fontSizeIndex_) + direction, 0, static_cast<int>(TERMINAL_FONT_IDS.size()) - 1);
   if (nextIndex == fontSizeIndex_) return;
   fontSizeIndex_ = static_cast<uint8_t>(nextIndex);
-  queueViewportGeometry();
+  if (documentMutex_ && xSemaphoreTake(documentMutex_, portMAX_DELAY) == pdTRUE) {
+    if (followLatest_) {
+      viewEnd_ = documentBytes_;
+      viewStart_ = pageStartEndingAt(viewEnd_);
+    } else {
+      viewStart_ = std::min(viewStart_, documentBytes_);
+      viewEnd_ = pageEndStartingAt(viewStart_);
+    }
+    xSemaphoreGive(documentMutex_);
+  }
   requestUpdate();
 }
 
-void BleTerminalActivity::queueViewportGeometry() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int bodyTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int bodyHeight = renderer.getScreenHeight() - bodyTop - metrics.buttonHintsHeight;
-  const int bodyWidth = renderer.getScreenWidth() - 2 * metrics.contentSidePadding;
-  const int fontId = terminalFontId();
-  const int glyphWidth = renderer.getTextWidth(fontId, "M");
-  const int lineHeight = renderer.getLineHeight(fontId);
-  if (bodyWidth <= 0 || bodyHeight <= 0 || glyphWidth <= 0 || lineHeight <= 0) return;
-  pendingViewportColumns_ = static_cast<uint16_t>(std::min(bodyWidth / glyphWidth, static_cast<int>(UINT16_MAX)));
-  pendingViewportRows_ = static_cast<uint16_t>(std::min(bodyHeight / lineHeight, static_cast<int>(UINT16_MAX)));
-  hasPendingViewport_ = pendingViewportColumns_ > 0 && pendingViewportRows_ > 0;
-  trySendPendingControl();
-}
-
-void BleTerminalActivity::queueFrameRequest(const ble_terminal::FrameRequest request, const uint32_t anchorFrameId,
-                                            const bool cleanRefresh) {
+void BleTerminalActivity::queueRangeRequest(const pagewire::RangeRequest request, const uint32_t anchor,
+                                            const int8_t navigation) {
   const unsigned long now = millis();
   const bool connectionWasIdle =
-      lastTransferActivityAt_ == 0 && transport_.status() == ble_terminal::BleTerminalTransport::Status::CONNECTED;
+      lastTransferActivityAt_ == 0 && transport_.status() == pagewire::PageWireTransport::Status::CONNECTED;
   lastTransferActivityAt_ = now;
   transport_.setTransferActive(true);
   if (connectionWasIdle) nextControlAttemptAt_ = now + CONNECTION_WAKE_MS;
-  pendingFrameRequest_ = request;
-  pendingRequestAnchor_ = anchorFrameId;
+  pendingRangeRequest_ = request;
+  pendingRequestGeneration_ = generation_;
+  pendingRequestRevision_ = revision_;
+  pendingRequestAnchor_ = anchor;
+  pendingNavigation_ = navigation;
   hasPendingRequest_ = true;
-  cleanRequestedFrame_ = cleanRequestedFrame_ || cleanRefresh;
   trySendPendingControl();
 }
 
@@ -363,72 +325,111 @@ void BleTerminalActivity::trySendPendingControl() {
 
   bool sent = false;
   if (hasPendingStatus_) {
-    sent = transport_.sendFrameStatus(pendingStatusFrameId_, pendingFrameStatus_);
+    sent =
+        transport_.sendDocumentStatus(pendingStatusGeneration_, pendingStatusRevision_, pendingDocumentStatus_);
     if (sent) hasPendingStatus_ = false;
-  } else if (hasPendingViewport_) {
-    sent = transport_.sendViewport(pendingViewportColumns_, pendingViewportRows_);
-    if (sent) hasPendingViewport_ = false;
+  } else if (helloPending_) {
+    sent = transport_.sendReaderHello(static_cast<uint16_t>(DOCUMENT_CAPACITY_BYTES));
+    if (sent) helloPending_ = false;
   } else if (hasPendingRequest_) {
-    sent = transport_.sendFrameRequest(pendingFrameRequest_, pendingRequestAnchor_);
+    sent = transport_.sendRangeRequest(pendingRangeRequest_, pendingRequestGeneration_, pendingRequestRevision_,
+                                       pendingRequestAnchor_, static_cast<uint16_t>(DOCUMENT_CAPACITY_BYTES));
     if (sent) hasPendingRequest_ = false;
   }
   nextControlAttemptAt_ = sent ? now : now + CONTROL_RETRY_MS;
 }
 
-void BleTerminalActivity::navigateFrame(const int direction) {
-  uint32_t anchor = 0;
+bool BleTerminalActivity::commitDocument() {
+  const bool hadDocument = generation_ != 0;
+  const uint32_t oldAnchor = windowStart_ + static_cast<uint32_t>(viewStart_);
+  generation_ = receiver_.generation();
+  revision_ = receiver_.revision();
+  windowStart_ = receiver_.windowStart();
+  documentLength_ = receiver_.documentLength();
+  documentBytes_ = receiver_.length();
+  std::memcpy(document_.data(), receiver_.text(), documentBytes_ + 1);
+  receiver_.setBase(document_.data(), documentBytes_, generation_, revision_);
+
+  const bool latest = (receiver_.flags() & pagewire::DOCUMENT_FLAG_LATEST) != 0;
+  const bool present = (receiver_.flags() & pagewire::DOCUMENT_FLAG_PRESENT) != 0;
+  const bool shouldPresent = !hadDocument || present || (latest && followLatest_);
+  if (!shouldPresent) return false;
+
+  if (pendingNavigation_ < 0) {
+    const uint32_t requestedAnchor = pendingRequestAnchor_ == 0 ? documentLength_ : pendingRequestAnchor_;
+    const size_t end = static_cast<size_t>(
+        std::clamp<uint32_t>(requestedAnchor, windowStart_, windowStart_ + static_cast<uint32_t>(documentBytes_)) -
+        windowStart_);
+    viewEnd_ = end;
+    viewStart_ = pageStartEndingAt(viewEnd_);
+  } else if (pendingNavigation_ > 0) {
+    const size_t start = static_cast<size_t>(
+        std::clamp<uint32_t>(pendingRequestAnchor_, windowStart_,
+                             windowStart_ + static_cast<uint32_t>(documentBytes_)) -
+        windowStart_);
+    viewStart_ = start;
+    viewEnd_ = pageEndStartingAt(viewStart_);
+  } else if (latest || !hadDocument) {
+    viewEnd_ = documentBytes_;
+    viewStart_ = pageStartEndingAt(viewEnd_);
+  } else {
+    const size_t start =
+        oldAnchor <= windowStart_ ? 0 : std::min<size_t>(oldAnchor - windowStart_, documentBytes_);
+    viewStart_ = start;
+    viewEnd_ = pageEndStartingAt(viewStart_);
+  }
+  pendingNavigation_ = 0;
+  latestDocument_ = latest;
+  followLatest_ = latest && windowStart_ + viewEnd_ >= documentLength_;
+  needsReset_ = false;
+  return true;
+}
+
+void BleTerminalActivity::navigateDocument(const int direction) {
   bool changed = false;
   bool requestRemote = false;
-  bool refreshLatest = false;
+  uint32_t anchor = 0;
+  pagewire::RangeRequest request = pagewire::RangeRequest::CURRENT;
 
-  if (frameMutex_ && xSemaphoreTake(frameMutex_, portMAX_DELAY) == pdTRUE) {
-    anchor = selectedFrameId();
-    if (anchor == 0) {
+  if (documentMutex_ && xSemaphoreTake(documentMutex_, portMAX_DELAY) == pdTRUE) {
+    if (generation_ == 0) {
       requestRemote = true;
-    } else {
-      const uint32_t expected = direction < 0 ? anchor - 1U : anchor + 1U;
-      const int slot = findFrameSlot(expected);
-      if (slot >= 0) {
-        selectedSlot_ = static_cast<int8_t>(slot);
-        followLatest_ = frames_[slot].latest;
+    } else if (direction < 0) {
+      anchor = windowStart_ + static_cast<uint32_t>(viewStart_);
+      const size_t previousStart = pageStartEndingAt(viewStart_);
+      if (viewStart_ == 0 && (windowStart_ > 0 || latestDocument_)) {
+        requestRemote = true;
+        request = pagewire::RangeRequest::BEFORE;
+      } else if (viewStart_ != 0) {
+        viewEnd_ = viewStart_;
+        viewStart_ = previousStart;
+        followLatest_ = false;
         changed = true;
-      } else if (direction < 0 || !frames_[selectedSlot_].latest) {
+      }
+    } else {
+      anchor = windowStart_ + static_cast<uint32_t>(viewEnd_);
+      if (viewEnd_ < documentBytes_) {
+        viewStart_ = viewEnd_;
+        viewEnd_ = pageEndStartingAt(viewStart_);
+        followLatest_ = windowStart_ + viewEnd_ >= documentLength_;
+        changed = true;
+      } else if (windowStart_ + documentBytes_ < documentLength_) {
         requestRemote = true;
+        request = pagewire::RangeRequest::AFTER;
       } else {
-        // Down has nowhere else to navigate: make it a cheap explicit refresh.
         requestRemote = true;
-        refreshLatest = true;
+        request = pagewire::RangeRequest::CURRENT;
       }
     }
-    xSemaphoreGive(frameMutex_);
+    xSemaphoreGive(documentMutex_);
   }
 
   if (changed) requestUpdate();
-  if (requestRemote) {
-    queueFrameRequest(refreshLatest   ? ble_terminal::FrameRequest::CURRENT
-                      : direction < 0 ? ble_terminal::FrameRequest::PREVIOUS
-                                      : ble_terminal::FrameRequest::NEXT,
-                      anchor);
-  }
+  if (requestRemote) queueRangeRequest(request, anchor, request == pagewire::RangeRequest::CURRENT ? 0 : direction);
 }
 
 void BleTerminalActivity::jumpToLatest() {
-  bool changed = false;
-  uint32_t anchor = 0;
-  if (frameMutex_ && xSemaphoreTake(frameMutex_, portMAX_DELAY) == pdTRUE) {
-    for (size_t index = 0; index < frames_.size(); ++index) {
-      if (frames_[index].occupied && frames_[index].latest) {
-        changed = selectedSlot_ != static_cast<int>(index);
-        selectedSlot_ = static_cast<int8_t>(index);
-        followLatest_ = true;
-        break;
-      }
-    }
-    anchor = selectedFrameId();
-    xSemaphoreGive(frameMutex_);
-  }
-  if (changed) requestUpdate();
-  queueFrameRequest(ble_terminal::FrameRequest::CURRENT, anchor);
+  queueRangeRequest(pagewire::RangeRequest::CURRENT, windowStart_ + static_cast<uint32_t>(viewEnd_));
 }
 
 void BleTerminalActivity::loop() {
@@ -442,25 +443,21 @@ void BleTerminalActivity::loop() {
   }
 
   if (pendingCommandReady_) {
-    // The keyboard can cover the terminal while a frame is arriving. Drain
-    // and acknowledge that frame without repainting it, then submit the
-    // command over the still-open BLE connection. The next normal loop asks
-    // for a fresh screen containing the command's result.
     serviceTransport(false);
     if (!transport_.readyToSend()) return;
     const bool sent = pendingCommandLength_ == 0
-                          ? transport_.sendAction(ble_terminal::Action::SUBMIT_INPUT)
-                          : crosspoint_plugin_send_terminal_command_v2(pendingCommand_.data(), pendingCommandLength_);
+                          ? transport_.sendAction(pagewire::Action::SUBMIT_INPUT)
+                          : transport_.sendCommand(pendingCommand_.data(), pendingCommandLength_);
     pendingCommandLength_ = 0;
     pendingCommand_[0] = '\0';
     pendingCommandReady_ = false;
     commandSendFailed_ = !sent;
+    if (sent) queueRangeRequest(pagewire::RangeRequest::CURRENT, 0);
     requestUpdate();
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    LOG_INF("BLE_TERM", "Back requested: stopping transport before Home");
     transport_.stop();
     onGoHome(HomeMenuItem::PLUGINS);
     return;
@@ -475,49 +472,50 @@ void BleTerminalActivity::loop() {
       commandKeyboardRequested_ = true;
       return;
     }
-
     const Rect decreaseButton =
         header_keyboard_button::layout(renderer, metrics, title, 1, HEADER_CONTROL_COUNT, HEADER_TITLE_GAP);
     if (mappedInput.wasTapInRect(decreaseButton.x, decreaseButton.y, decreaseButton.width, decreaseButton.height)) {
       changeFontSize(-1);
       return;
     }
-
     const Rect increaseButton =
         header_keyboard_button::layout(renderer, metrics, title, 2, HEADER_CONTROL_COUNT, HEADER_TITLE_GAP);
     if (mappedInput.wasTapInRect(increaseButton.x, increaseButton.y, increaseButton.width, increaseButton.height)) {
       changeFontSize(1);
       return;
     }
-
     const Rect refreshButton =
         header_keyboard_button::layout(renderer, metrics, title, 3, HEADER_CONTROL_COUNT, HEADER_TITLE_GAP);
     int touchX = 0;
     int touchY = 0;
     if (mappedInput.wasScreenLongPress(touchX, touchY)) {
       if (pointInRect(touchX, touchY, refreshButton)) {
-        queueFrameRequest(ble_terminal::FrameRequest::CURRENT, selectedFrameId(), true);
+        cleanRefreshPending_ = true;
+        requestUpdate();
+        queueRangeRequest(pagewire::RangeRequest::CURRENT, windowStart_ + static_cast<uint32_t>(viewEnd_));
       }
       return;
     }
     if (mappedInput.wasTapInRect(refreshButton.x, refreshButton.y, refreshButton.width, refreshButton.height)) {
-      queueFrameRequest(ble_terminal::FrameRequest::CURRENT, selectedFrameId());
+      queueRangeRequest(pagewire::RangeRequest::CURRENT, windowStart_ + static_cast<uint32_t>(viewEnd_));
       return;
     }
   }
 
   if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
-    queueFrameRequest(ble_terminal::FrameRequest::CURRENT, selectedFrameId(), true);
+    cleanRefreshPending_ = true;
+    requestUpdate();
+    queueRangeRequest(pagewire::RangeRequest::CURRENT, windowStart_ + static_cast<uint32_t>(viewEnd_));
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    queueFrameRequest(ble_terminal::FrameRequest::CURRENT, selectedFrameId());
+    queueRangeRequest(pagewire::RangeRequest::CURRENT, windowStart_ + static_cast<uint32_t>(viewEnd_));
   }
 
   if (mappedInput.wasLongPressed(MappedInputManager::Button::Down, LONG_PRESS_MS)) {
     jumpToLatest();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-    navigateFrame(-1);
+    navigateDocument(-1);
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    navigateFrame(1);
+    navigateDocument(1);
   }
 
   serviceTransport(true);
@@ -525,53 +523,58 @@ void BleTerminalActivity::loop() {
 
 void BleTerminalActivity::serviceTransport(const bool terminalVisible) {
   const unsigned long now = millis();
-  if (!terminalVisible && readyAfterRenderFrameId_ != 0) {
-    pendingStatusFrameId_ = readyAfterRenderFrameId_;
-    pendingFrameStatus_ = ble_terminal::FrameStatus::READY;
+  if (!terminalVisible && readyAfterRenderGeneration_ != 0) {
+    pendingStatusGeneration_ = readyAfterRenderGeneration_;
+    pendingStatusRevision_ = readyAfterRenderRevision_;
+    pendingDocumentStatus_ = pagewire::DocumentStatus::READY;
     hasPendingStatus_ = true;
-    readyAfterRenderFrameId_ = 0;
+    readyAfterRenderGeneration_ = 0;
+    readyAfterRenderRevision_ = 0;
   }
 
-  ble_terminal::BleTerminalTransport::IncomingPacket packet;
+  pagewire::PageWireTransport::IncomingPacket packet{};
   while (transport_.poll(packet)) {
-    if (!frameMutex_ || xSemaphoreTake(frameMutex_, portMAX_DELAY) != pdTRUE) continue;
+    if (!documentMutex_ || xSemaphoreTake(documentMutex_, portMAX_DELAY) != pdTRUE) continue;
+    const pagewire::AcceptResult result = receiver_.accept(packet.bytes.data(), packet.length);
+    const uint32_t incomingGeneration = receiver_.generation();
+    const uint32_t incomingRevision = receiver_.revision();
+    const bool validPacket = result == pagewire::AcceptResult::DOCUMENT_STARTED ||
+                             result == pagewire::AcceptResult::DOCUMENT_DATA_ACCEPTED ||
+                             result == pagewire::AcceptResult::DOCUMENT_COPY_ACCEPTED ||
+                             result == pagewire::AcceptResult::DOCUMENT_COMMITTED ||
+                             result == pagewire::AcceptResult::DUPLICATE_IGNORED;
+    const bool baseMismatch = result == pagewire::AcceptResult::BASE_MISMATCH;
+    const bool documentError =
+        result == pagewire::AcceptResult::NEEDS_BEGIN || result == pagewire::AcceptResult::OUT_OF_ORDER ||
+        result == pagewire::AcceptResult::TOO_LARGE || result == pagewire::AcceptResult::INVALID_TEXT ||
+        result == pagewire::AcceptResult::INVALID_DOCUMENT || result == pagewire::AcceptResult::CRC_MISMATCH ||
+        result == pagewire::AcceptResult::UNSUPPORTED_VERSION;
+    bool present = false;
+    if (result == pagewire::AcceptResult::DOCUMENT_COMMITTED) present = commitDocument();
+    if (documentError) needsReset_ = true;
+    xSemaphoreGive(documentMutex_);
 
-    const ble_terminal::AcceptResult result = receiver_.accept(packet.bytes.data(), packet.length);
-    const uint32_t frameId = receiver_.frameId();
-    const bool validFramePacket = result == ble_terminal::AcceptResult::FRAME_STARTED ||
-                                  result == ble_terminal::AcceptResult::FRAME_DATA_ACCEPTED ||
-                                  result == ble_terminal::AcceptResult::FRAME_COMMITTED ||
-                                  result == ble_terminal::AcceptResult::DUPLICATE_IGNORED;
-    const bool frameError =
-        result == ble_terminal::AcceptResult::NEEDS_BEGIN || result == ble_terminal::AcceptResult::OUT_OF_ORDER ||
-        result == ble_terminal::AcceptResult::TOO_LARGE || result == ble_terminal::AcceptResult::INVALID_TEXT ||
-        result == ble_terminal::AcceptResult::INVALID_FRAME || result == ble_terminal::AcceptResult::CRC_MISMATCH ||
-        result == ble_terminal::AcceptResult::UNSUPPORTED_VERSION;
-
-    bool presentFrame = false;
-    if (result == ble_terminal::AcceptResult::FRAME_COMMITTED) {
-      presentFrame = cacheCommittedFrame();
-    }
-    if (frameError) needsReset_ = true;
-    xSemaphoreGive(frameMutex_);
-
-    if (validFramePacket || frameError) {
+    if (validPacket || baseMismatch || documentError) {
       lastPacketAt_ = now;
       lastTransferActivityAt_ = now;
       transport_.setTransferActive(true);
     }
-    if (result == ble_terminal::AcceptResult::FRAME_COMMITTED) {
-      if (presentFrame && terminalVisible) {
-        readyAfterRenderFrameId_ = frameId;
+    if (result == pagewire::AcceptResult::DOCUMENT_COMMITTED) {
+      if (present && terminalVisible) {
+        readyAfterRenderGeneration_ = incomingGeneration;
+        readyAfterRenderRevision_ = incomingRevision;
         requestUpdate();
       } else {
-        pendingStatusFrameId_ = frameId;
-        pendingFrameStatus_ = ble_terminal::FrameStatus::READY;
+        pendingStatusGeneration_ = incomingGeneration;
+        pendingStatusRevision_ = incomingRevision;
+        pendingDocumentStatus_ = pagewire::DocumentStatus::READY;
         hasPendingStatus_ = true;
       }
-    } else if (frameError && frameId != 0) {
-      pendingStatusFrameId_ = frameId;
-      pendingFrameStatus_ = ble_terminal::FrameStatus::RETRY;
+    } else if ((baseMismatch || documentError) && incomingGeneration != 0 && incomingRevision != 0) {
+      pendingStatusGeneration_ = incomingGeneration;
+      pendingStatusRevision_ = incomingRevision;
+      pendingDocumentStatus_ =
+          baseMismatch ? pagewire::DocumentStatus::NEED_FULL : pagewire::DocumentStatus::RETRY;
       hasPendingStatus_ = true;
       if (terminalVisible) requestUpdate();
     }
@@ -581,23 +584,27 @@ void BleTerminalActivity::serviceTransport(const bool terminalVisible) {
   if (statusRevision != observedStatusRevision_) {
     observedStatusRevision_ = statusRevision;
     const auto status = transport_.status();
-    if (status == ble_terminal::BleTerminalTransport::Status::CONNECTED) {
+    if (status == pagewire::PageWireTransport::Status::CONNECTED) {
       lastTransferActivityAt_ = now;
       transport_.setTransferActive(true);
+      helloPending_ = true;
+      initialDocumentRequested_ = false;
     } else {
-      initialFrameRequested_ = false;
+      initialDocumentRequested_ = false;
+      helloPending_ = false;
     }
-    if (terminalVisible && (selectedSlot_ < 0 || status == ble_terminal::BleTerminalTransport::Status::PAIRING ||
-                            status == ble_terminal::BleTerminalTransport::Status::ERROR)) {
+    if (terminalVisible &&
+        (generation_ == 0 || status == pagewire::PageWireTransport::Status::PAIRING ||
+         status == pagewire::PageWireTransport::Status::ERROR)) {
       requestUpdate();
     }
   }
 
-  if (!pendingCommandReady_ && !initialFrameRequested_ &&
-      transport_.status() == ble_terminal::BleTerminalTransport::Status::CONNECTED && transport_.readyToSend()) {
-    initialFrameRequested_ = true;
-    queueViewportGeometry();
-    queueFrameRequest(ble_terminal::FrameRequest::CURRENT, selectedFrameId());
+  if (!pendingCommandReady_ && !initialDocumentRequested_ &&
+      transport_.status() == pagewire::PageWireTransport::Status::CONNECTED) {
+    initialDocumentRequested_ = true;
+    helloPending_ = true;
+    queueRangeRequest(pagewire::RangeRequest::CURRENT, windowStart_ + static_cast<uint32_t>(viewEnd_));
   }
 
   if (lastTransferActivityAt_ != 0 && now - lastTransferActivityAt_ >= TRANSFER_IDLE_MS) {
@@ -620,37 +627,37 @@ bool BleTerminalActivity::handleHomeGesture() {
 
 void BleTerminalActivity::formatStatusText(char* buffer, const size_t bufferSize) const {
   if (commandSendFailed_) {
-    snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::COMMAND_SEND_FAILED);
+    std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::COMMAND_SEND_FAILED);
     return;
   }
   if (needsReset_) {
-    snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_RESYNC);
+    std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_RESYNC);
     return;
   }
-
   switch (transport_.status()) {
-    case ble_terminal::BleTerminalTransport::Status::ADVERTISING:
-      snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_WAITING);
+    case pagewire::PageWireTransport::Status::ADVERTISING:
+      std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_WAITING);
       return;
-    case ble_terminal::BleTerminalTransport::Status::PAIRING: {
+    case pagewire::PageWireTransport::Status::PAIRING: {
       const uint32_t passkey = transport_.pairingPasskey();
       if (passkey == 0) {
-        snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_SECURING);
+        std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_SECURING);
       } else {
-        snprintf(buffer, bufferSize, crosspoint_plugin_strings::BLE_PAIRING, static_cast<unsigned long>(passkey));
+        std::snprintf(buffer, bufferSize, crosspoint_plugin_strings::BLE_PAIRING,
+                      static_cast<unsigned long>(passkey));
       }
       return;
     }
-    case ble_terminal::BleTerminalTransport::Status::CONNECTED:
-      snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_CONNECTED);
+    case pagewire::PageWireTransport::Status::CONNECTED:
+      std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_CONNECTED);
       return;
-    case ble_terminal::BleTerminalTransport::Status::ERROR:
-      snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_ERROR);
+    case pagewire::PageWireTransport::Status::ERROR:
+      std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_ERROR);
       return;
-    case ble_terminal::BleTerminalTransport::Status::STARTING:
-    case ble_terminal::BleTerminalTransport::Status::STOPPED:
+    case pagewire::PageWireTransport::Status::STARTING:
+    case pagewire::PageWireTransport::Status::STOPPED:
     default:
-      snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_STARTING);
+      std::snprintf(buffer, bufferSize, "%s", crosspoint_plugin_strings::BLE_STARTING);
       return;
   }
 }
@@ -678,54 +685,51 @@ void BleTerminalActivity::render(RenderLock&&) {
 
   const int bodyTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int bodyHeight = pageHeight - bodyTop - metrics.buttonHintsHeight;
-  const int bodyWidth = pageWidth - 2 * metrics.contentSidePadding;
+  const int contentWidth = pageWidth - 2 * metrics.contentSidePadding;
   const int fontId = terminalFontId();
   const int lineHeight = renderer.getLineHeight(fontId);
   const int maxLines = lineHeight > 0 ? bodyHeight / lineHeight : 0;
 
-  if (frameMutex_ && xSemaphoreTake(frameMutex_, portMAX_DELAY) == pdTRUE) {
+  if (documentMutex_ && xSemaphoreTake(documentMutex_, portMAX_DELAY) == pdTRUE) {
     const auto status = transport_.status();
-    const bool securityStatusNeedsScreen = status == ble_terminal::BleTerminalTransport::Status::PAIRING ||
-                                           status == ble_terminal::BleTerminalTransport::Status::ERROR;
-    const bool hasFrame = selectedSlot_ >= 0 && frames_[selectedSlot_].occupied;
-    if (commandSendFailed_ || needsReset_ || !hasFrame || maxLines <= 0 || securityStatusNeedsScreen) {
+    const bool securityStatusNeedsScreen = status == pagewire::PageWireTransport::Status::PAIRING ||
+                                           status == pagewire::PageWireTransport::Status::ERROR;
+    if (commandSendFailed_ || needsReset_ || generation_ == 0 || maxLines <= 0 || securityStatusNeedsScreen) {
       std::array<char, 192> statusMessage{};
       formatStatusText(statusMessage.data(), statusMessage.size());
       const uint32_t pairingPasskey = transport_.pairingPasskey();
-      if (status == ble_terminal::BleTerminalTransport::Status::PAIRING && pairingPasskey != 0) {
+      if (status == pagewire::PageWireTransport::Status::PAIRING && pairingPasskey != 0) {
         const int codeLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
         const int hintLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
         const int hintHeight = hintLineHeight * 2;
         const int blockHeight = codeLineHeight + metrics.verticalSpacing + hintHeight;
         const int codeY = bodyTop + (bodyHeight - blockHeight) / 2;
-        UITheme::drawCenteredText(renderer, Rect{metrics.contentSidePadding, bodyTop, bodyWidth, bodyHeight},
+        UITheme::drawCenteredText(renderer, Rect{metrics.contentSidePadding, bodyTop, contentWidth, bodyHeight},
                                   UI_12_FONT_ID, codeY, statusMessage.data(), true, EpdFontFamily::BOLD);
         UITheme::drawCenteredWrappedText(
             renderer,
-            Rect{metrics.contentSidePadding, codeY + codeLineHeight + metrics.verticalSpacing, bodyWidth, hintHeight},
+            Rect{metrics.contentSidePadding, codeY + codeLineHeight + metrics.verticalSpacing, contentWidth,
+                 hintHeight},
             UI_10_FONT_ID, crosspoint_plugin_strings::BLE_PAIRING_HINT, 2);
       } else {
-        UITheme::drawCenteredWrappedText(renderer, Rect{metrics.contentSidePadding, bodyTop, bodyWidth, bodyHeight},
-                                         UI_10_FONT_ID, statusMessage.data(), 5);
+        UITheme::drawCenteredWrappedText(
+            renderer, Rect{metrics.contentSidePadding, bodyTop, contentWidth, bodyHeight}, UI_10_FONT_ID,
+            statusMessage.data(), 5);
       }
     } else {
-      const CachedFrame& frame = frames_[selectedSlot_];
-      const size_t totalLines =
-          countVisualLines(renderer, fontId, frame.text.data(), frame.length, bodyWidth, displayLine_);
-      const size_t visibleLines = static_cast<size_t>(maxLines);
-      const size_t firstIndex = totalLines > visibleLines ? totalLines - visibleLines : 0;
-      size_t cursor =
-          visualLineStart(renderer, fontId, frame.text.data(), frame.length, bodyWidth, firstIndex, displayLine_);
+      size_t cursor = std::min(viewStart_, documentBytes_);
+      const size_t renderEnd = std::min(viewEnd_, documentBytes_);
       int y = bodyTop;
-      for (int displayedLine = 0; displayedLine < maxLines && cursor <= frame.length; ++displayedLine) {
-        const VisualLine visualLine =
-            prepareVisualLine(renderer, fontId, frame.text.data(), frame.length, cursor, bodyWidth, displayLine_);
+      for (int displayedLine = 0; displayedLine < maxLines && cursor < renderEnd; ++displayedLine) {
+        const VisualLine line =
+            prepareVisualLine(renderer, fontId, document_.data(), renderEnd, cursor, contentWidth, displayLine_);
         if (displayLine_[0] != '\0') renderer.drawText(fontId, metrics.contentSidePadding, y, displayLine_.data());
         y += lineHeight;
-        cursor = visualLine.nextStart;
+        cursor = line.nextStart;
       }
+      viewEnd_ = std::min(cursor, renderEnd);
     }
-    xSemaphoreGive(frameMutex_);
+    xSemaphoreGive(documentMutex_);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_FORCE_REFRESH), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -735,11 +739,13 @@ void BleTerminalActivity::render(RenderLock&&) {
   cleanRefreshPending_ = false;
   renderer.displayBuffer(refreshMode);
 
-  if (readyAfterRenderFrameId_ != 0) {
-    pendingStatusFrameId_ = readyAfterRenderFrameId_;
-    pendingFrameStatus_ = ble_terminal::FrameStatus::READY;
+  if (readyAfterRenderGeneration_ != 0) {
+    pendingStatusGeneration_ = readyAfterRenderGeneration_;
+    pendingStatusRevision_ = readyAfterRenderRevision_;
+    pendingDocumentStatus_ = pagewire::DocumentStatus::READY;
     hasPendingStatus_ = true;
-    readyAfterRenderFrameId_ = 0;
+    readyAfterRenderGeneration_ = 0;
+    readyAfterRenderRevision_ = 0;
   }
 }
 

@@ -32,22 +32,22 @@ uint32_t readLe32(const uint8_t* data) {
          (static_cast<uint32_t>(data[2]) << 16U) | (static_cast<uint32_t>(data[3]) << 24U);
 }
 
-bool decodePacket(const ble_terminal::BleTerminalTransport::IncomingPacket& packet, ble_terminal::PacketType& type,
+bool decodePacket(const pagewire::PageWireTransport::IncomingPacket& packet, pagewire::PacketType& type,
                   uint32_t& sequence, const uint8_t*& payload, size_t& payloadLength) {
-  if (packet.length < ble_terminal::PACKET_HEADER_BYTES || packet.length > packet.bytes.size() ||
-      packet.bytes[0] != ble_terminal::MAGIC_0 || packet.bytes[1] != ble_terminal::MAGIC_1 ||
-      packet.bytes[2] != ble_terminal::PROTOCOL_VERSION) {
+  if (packet.length < pagewire::PACKET_HEADER_BYTES || packet.length > packet.bytes.size() ||
+      packet.bytes[0] != pagewire::MAGIC_0 || packet.bytes[1] != pagewire::MAGIC_1 ||
+      packet.bytes[2] != pagewire::PROTOCOL_VERSION) {
     return false;
   }
   payloadLength = readLe16(packet.bytes.data() + 8);
-  if (payloadLength != packet.length - ble_terminal::PACKET_HEADER_BYTES) return false;
-  type = static_cast<ble_terminal::PacketType>(packet.bytes[3]);
+  if (payloadLength != packet.length - pagewire::PACKET_HEADER_BYTES) return false;
+  type = static_cast<pagewire::PacketType>(packet.bytes[3]);
   sequence = readLe32(packet.bytes.data() + 4);
-  payload = packet.bytes.data() + ble_terminal::PACKET_HEADER_BYTES;
+  payload = packet.bytes.data() + pagewire::PACKET_HEADER_BYTES;
   return true;
 }
 
-uint32_t packetHash(const ble_terminal::BleTerminalTransport::IncomingPacket& packet) {
+uint32_t packetHash(const pagewire::PageWireTransport::IncomingPacket& packet) {
   uint32_t hash = 2166136261U;
   for (size_t index = 0; index < packet.length; ++index) {
     hash = (hash ^ packet.bytes[index]) * 16777619U;
@@ -58,7 +58,7 @@ uint32_t packetHash(const ble_terminal::BleTerminalTransport::IncomingPacket& pa
 }  // namespace
 
 PluginsActivity::PluginsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : Activity("Plugins", renderer, mappedInput), transport_(ble_terminal::sharedTransport()) {}
+    : Activity("Plugins", renderer, mappedInput), transport_(pagewire::sharedPageWireTransport()) {}
 
 void PluginsActivity::onEnter() {
   Activity::onEnter();
@@ -127,7 +127,7 @@ void PluginsActivity::leaveInstaller() {
   requestUpdate();
 }
 
-void PluginsActivity::queueStatus(const crosspoint_plugin::UpdateStatusV3 status, const uint32_t value) {
+void PluginsActivity::queueStatus(const UpdateStatus status, const uint32_t value) {
   pendingStatus_ = status;
   pendingStatusValue_ = value;
   hasPendingStatus_ = true;
@@ -138,12 +138,12 @@ void PluginsActivity::failInstall(const uint32_t errorCode) {
   installResult_ = InstallResult::ERROR;
   expectedBytes_ = 0;
   writtenBytes_ = 0;
-  queueStatus(crosspoint_plugin::UpdateStatusV3::ERROR, errorCode);
+  queueStatus(UpdateStatus::ERROR, errorCode);
   requestUpdate();
 }
 
-void PluginsActivity::acceptInstallerPacket(const ble_terminal::BleTerminalTransport::IncomingPacket& packet) {
-  ble_terminal::PacketType type{};
+void PluginsActivity::acceptInstallerPacket(const pagewire::PageWireTransport::IncomingPacket& packet) {
+  pagewire::PacketType type{};
   uint32_t sequence = 0;
   const uint8_t* payload = nullptr;
   size_t payloadLength = 0;
@@ -160,7 +160,7 @@ void PluginsActivity::acceptInstallerPacket(const ble_terminal::BleTerminalTrans
   lastUpdatePacketHash_ = hash;
   hasLastUpdatePacket_ = true;
 
-  if (type == ble_terminal::PacketType::PLUGIN_UPDATE_BEGIN) {
+  if (type == pagewire::PacketType::PLUGIN_UPDATE_BEGIN) {
     if (!payload || payloadLength < UPDATE_BEGIN_FIXED_BYTES) {
       failInstall(ERROR_INVALID_PACKET);
       return;
@@ -182,11 +182,11 @@ void PluginsActivity::acceptInstallerPacket(const ble_terminal::BleTerminalTrans
     }
     installResult_ = InstallResult::INSTALLING;
     requestUpdateAndWait();
-    queueStatus(crosspoint_plugin::UpdateStatusV3::READY, 0);
+    queueStatus(UpdateStatus::READY, 0);
     return;
   }
 
-  if (type == ble_terminal::PacketType::PLUGIN_UPDATE_DATA) {
+  if (type == pagewire::PacketType::PLUGIN_UPDATE_DATA) {
     if (installResult_ != InstallResult::INSTALLING || !payload || payloadLength <= sizeof(uint32_t)) {
       failInstall(ERROR_INVALID_PACKET);
       return;
@@ -201,7 +201,7 @@ void PluginsActivity::acceptInstallerPacket(const ble_terminal::BleTerminalTrans
     return;
   }
 
-  if (type == ble_terminal::PacketType::PLUGIN_UPDATE_END) {
+  if (type == pagewire::PacketType::PLUGIN_UPDATE_END) {
     if (installResult_ != InstallResult::INSTALLING || !payload || payloadLength != sizeof(uint32_t) ||
         readLe32(payload) != expectedBytes_ || writtenBytes_ != expectedBytes_) {
       failInstall(ERROR_INVALID_PACKET);
@@ -213,15 +213,15 @@ void PluginsActivity::acceptInstallerPacket(const ble_terminal::BleTerminalTrans
     }
     installResult_ = InstallResult::COMPLETE;
     requestUpdateAndWait();
-    queueStatus(crosspoint_plugin::UpdateStatusV3::COMPLETE, writtenBytes_);
+    queueStatus(UpdateStatus::COMPLETE, writtenBytes_);
   }
 }
 
 void PluginsActivity::serviceInstaller() {
   const auto status = transport_.status();
   if (status != previousTransportStatus_) {
-    if (previousTransportStatus_ == ble_terminal::BleTerminalTransport::Status::CONNECTED &&
-        status != ble_terminal::BleTerminalTransport::Status::CONNECTED) {
+    if (previousTransportStatus_ == pagewire::PageWireTransport::Status::CONNECTED &&
+        status != pagewire::PageWireTransport::Status::CONNECTED) {
       crosspoint_plugin_install_abort_v3();
       installResult_ = InstallResult::IDLE;
       expectedBytes_ = 0;
@@ -234,8 +234,8 @@ void PluginsActivity::serviceInstaller() {
     requestUpdate();
   }
 
-  ble_terminal::BleTerminalTransport::IncomingPacket packet{};
-  if (status != ble_terminal::BleTerminalTransport::Status::CONNECTED) {
+  pagewire::PageWireTransport::IncomingPacket packet{};
+  if (status != pagewire::PageWireTransport::Status::CONNECTED) {
     while (transport_.poll(packet)) {
     }
     const uint32_t revision = transport_.statusRevision();
@@ -249,8 +249,10 @@ void PluginsActivity::serviceInstaller() {
 
   if (transport_.readyToSend()) {
     if (hasPendingStatus_) {
-      if (crosspoint_plugin_send_update_status_v3(pendingStatus_, pendingStatusValue_)) hasPendingStatus_ = false;
-    } else if (!helloSent_ && crosspoint_plugin_send_update_hello_v3()) {
+      if (transport_.sendPluginUpdateStatus(static_cast<uint8_t>(pendingStatus_), pendingStatusValue_)) {
+        hasPendingStatus_ = false;
+      }
+    } else if (!helloSent_ && transport_.sendPluginUpdateHello(crosspoint_plugin::ABI_VERSION)) {
       helloSent_ = true;
     }
   }
@@ -318,13 +320,13 @@ bool PluginsActivity::handleHomeGesture() {
 
 void PluginsActivity::formatInstallStatus(char* buffer, const size_t capacity) const {
   const auto status = transport_.status();
-  if (status == ble_terminal::BleTerminalTransport::Status::ERROR) {
+  if (status == pagewire::PageWireTransport::Status::ERROR) {
     std::snprintf(buffer, capacity, "%s", crosspoint_plugin_strings::BLE_ERROR);
-  } else if (status == ble_terminal::BleTerminalTransport::Status::STARTING) {
+  } else if (status == pagewire::PageWireTransport::Status::STARTING) {
     std::snprintf(buffer, capacity, "%s", crosspoint_plugin_strings::INSTALL_STARTING);
-  } else if (status == ble_terminal::BleTerminalTransport::Status::ADVERTISING) {
+  } else if (status == pagewire::PageWireTransport::Status::ADVERTISING) {
     std::snprintf(buffer, capacity, "%s", crosspoint_plugin_strings::INSTALL_WAITING);
-  } else if (status == ble_terminal::BleTerminalTransport::Status::PAIRING) {
+  } else if (status == pagewire::PageWireTransport::Status::PAIRING) {
     const uint32_t passkey = transport_.pairingPasskey();
     if (passkey != 0) {
       std::snprintf(buffer, capacity, crosspoint_plugin_strings::BLE_PAIRING, static_cast<unsigned long>(passkey));
@@ -338,7 +340,7 @@ void PluginsActivity::formatInstallStatus(char* buffer, const size_t capacity) c
   } else if (installResult_ == InstallResult::INSTALLING) {
     std::snprintf(buffer, capacity, crosspoint_plugin_strings::INSTALLING, installModule_.data(),
                   static_cast<unsigned long>(writtenBytes_), static_cast<unsigned long>(expectedBytes_));
-  } else if (status == ble_terminal::BleTerminalTransport::Status::CONNECTED) {
+  } else if (status == pagewire::PageWireTransport::Status::CONNECTED) {
     std::snprintf(buffer, capacity, "%s", crosspoint_plugin_strings::INSTALL_CONNECTED);
   } else {
     std::snprintf(buffer, capacity, "%s", crosspoint_plugin_strings::INSTALL_STARTING);

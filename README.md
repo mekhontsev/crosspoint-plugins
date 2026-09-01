@@ -1,46 +1,40 @@
 # CrossPoint Plugins
 
-SD-loaded plugins for the experimental Xteink X4 Pro fork of CrossPoint
-Reader. This repository is intentionally separate from the firmware: plugins
-build independently and can be updated without reflashing the reader.
+Independently built SD-loaded plugins for the experimental Xteink X4 Pro
+CrossPoint fork. Normal plugin development and updates do not require a firmware
+reflash.
 
-The complete system consists of:
+The complete system is split across:
 
-- [`crosspoint-reader`](https://github.com/mekhontsev/crosspoint-reader) — the
-  firmware fork and plugin host;
-- this repository — the plugin sources and SD-card bundle;
-- [`pagewire`](https://github.com/mekhontsev/pagewire) — the
-  Android/Termux client and protocol specification.
+- [`crosspoint-reader`](https://github.com/mekhontsev/crosspoint-reader): minimal
+  firmware host and generic authenticated BLE service;
+- this repository: manager, updater, Terminal, plugin SDK headers, and bundle;
+- [`pagewire`](https://github.com/mekhontsev/pagewire): protocol plus the
+  Android/Termux companion.
 
-See the shared
-[PageWire and X4 Terminal user guide](https://github.com/mekhontsev/pagewire/blob/main/docs/user-guide.md)
-for installation, controls, recovery, and current limitations. This software is
-experimental, supports the **Xteink X4 Pro only**, and is not an official
-CrossPoint or Xteink release.
-
-See [Plugin Architecture](ARCHITECTURE.md) for the lazy-loading boundary,
-independent update paths, integrity checks, failure containment, and the small
-delta maintained against upstream firmware. Authors should start with
-[Plugin Development](PLUGIN_DEVELOPMENT.md) for the module contract, available
-firmware services, BLE/PageWire access, build steps, and lifecycle rules.
+Use the single
+[PageWire Terminal user guide](https://github.com/mekhontsev/pagewire/blob/main/docs/user-guide.md)
+for installation, updates, controls, and recovery. See
+[Plugin Architecture](ARCHITECTURE.md) and
+[Plugin Development](PLUGIN_DEVELOPMENT.md) for implementation details.
 
 > [!NOTE]
-> This project is **AI vibe-coded**: implementation and documentation are
-> developed with AI coding agents under maintainer direction, review, builds,
+> This project is **AI vibe-coded** under maintainer direction, review, builds,
 > and hardware testing.
 
-The current bundle contains:
+The current **0.2.0** bundle uses plugin ABI **4** and contains:
 
-- `manager.so` — the lazily loaded **Plugins** menu;
-- `terminal.so` — the Bluetooth tmux terminal and its IBM Plex Mono fonts.
+- `manager.so`: lazy Plugins menu and Bluetooth child updater;
+- `terminal.so`: PageWire v5 parser, continuous text cache, local layout,
+  keyboard integration, and Terminal fonts.
 
-The current source version is **0.2.0** and uses plugin ABI **3**. A plugin is
-accepted only when its ABI matches the installed firmware host.
+The manager discovers child `.so` modules dynamically from their embedded
+metadata. Neither manager nor firmware contains a hard-coded Terminal catalog.
 
 ## Install
 
-For the first installation, extract `crosspoint-plugins.zip` into the root of
-the reader's SD card. It creates:
+Extract `crosspoint-plugins.zip` and copy its `plugins` directory to the SD card
+root:
 
 ```text
 /plugins/manager.so
@@ -48,40 +42,30 @@ the reader's SD card. It creates:
 /plugins/bundle.json
 ```
 
-Once a compatible manager is installed, child plugins can also be updated over
-BLE: select the ZIP in PageWire, then choose **Plugins > Install via
-Bluetooth** on the reader. `manager.so` deliberately remains an SD-card update
-so the updater cannot replace itself during a transfer.
+After the manager is present, compatible child plugins can also be streamed
+from a local ZIP using PageWire and **Plugins > Install via Bluetooth**.
+`manager.so` remains an SD/Wi-Fi update so the updater cannot replace itself.
 
 ## Build
 
-Place a compatible `crosspoint-reader` checkout next to this repository, then
-run:
+Place a compatible `crosspoint-reader` checkout beside this repository and run:
 
 ```sh
 ./bin/build
 ```
 
-On Termux the wrapper runs the build inside the installed Ubuntu proot. Set
-`CROSSPOINT_FIRMWARE_DIR` when the firmware checkout is elsewhere. The build
-uses the firmware's PlatformIO compile database and toolchain but never builds
-or links a firmware image. All module `.cpp` files are owned by this repository;
-the firmware checkout supplies headers, the compiler configuration, and the
-host ABI manifest only.
+On Termux the wrapper uses the installed Ubuntu proot. Set
+`CROSSPOINT_FIRMWARE_DIR` if the firmware checkout is elsewhere. The firmware
+checkout supplies headers, compile flags, toolchain, and the host-symbol
+allow-list; it does not build or link a firmware image.
 
-The result is `build/crosspoint-plugins.zip`.
+Output: `build/crosspoint-plugins.zip`.
 
-Every `.so` carries its ABI version, ELF length, and SHA-256 digest. The loader
-requires a matching ABI and valid digest, so plugins can work across compatible
-firmware revisions. Plugin code is loaded into PSRAM only after **Plugins** is
-selected; Terminal starts Bluetooth only after its own row is selected.
+Every module carries ABI, ELF length, SHA-256, and metadata. The loader validates
+them before listing/loading a child. Modules are relocated to PSRAM only when
+selected, and BLE starts only while an owning plugin activity is open.
 
-The manager discovers child `.so` files dynamically from their embedded title,
-version, and ordering metadata. The firmware reads this metadata without loading
-or executing the plugin, and the manager does not contain a catalog of plugin
-names.
+## License
 
-## Licensing
-
-Project code is MIT licensed. Generated IBM Plex Mono font data is derived
-from the SIL Open Font License 1.1 font; see `FONT-LICENSE.txt`.
+Project code is MIT licensed. Generated IBM Plex Mono data derives from the SIL
+Open Font License 1.1 font; see [FONT-LICENSE.txt](FONT-LICENSE.txt).

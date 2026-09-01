@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "activities/Activity.h"
-#include "ble/BleTerminalTransport.h"
+#include "pagewire/PageWireTransport.h"
 #include "crosspoint/PluginAbi.h"
 
 class PluginsActivity final : public Activity {
@@ -22,8 +22,9 @@ class PluginsActivity final : public Activity {
  private:
   enum class Screen : uint8_t { LIST, INSTALL };
   enum class InstallResult : uint8_t { IDLE, INSTALLING, COMPLETE, ERROR };
+  enum class UpdateStatus : uint8_t { READY = 1, COMPLETE = 2, ERROR = 3 };
 
-  ble_terminal::BleTerminalTransport& transport_;
+  pagewire::PageWireTransport& transport_;
   std::array<crosspoint_plugin::PluginInfoV3, crosspoint_plugin::MAX_LISTED_MODULES> modules_{};
   std::array<char, crosspoint_plugin::MODULE_NAME_BYTES> installModule_{};
   size_t moduleCount_ = 0;
@@ -35,9 +36,9 @@ class PluginsActivity final : public Activity {
   uint32_t pendingStatusValue_ = 0;
   uint32_t lastUpdateSequence_ = 0;
   uint32_t lastUpdatePacketHash_ = 0;
-  crosspoint_plugin::UpdateStatusV3 pendingStatus_ = crosspoint_plugin::UpdateStatusV3::ERROR;
-  ble_terminal::BleTerminalTransport::Status previousTransportStatus_ =
-      ble_terminal::BleTerminalTransport::Status::STOPPED;
+  UpdateStatus pendingStatus_ = UpdateStatus::ERROR;
+  pagewire::PageWireTransport::Status previousTransportStatus_ =
+      pagewire::PageWireTransport::Status::STOPPED;
   Screen screen_ = Screen::LIST;
   InstallResult installResult_ = InstallResult::IDLE;
   bool loadFailed_ = false;
@@ -50,8 +51,8 @@ class PluginsActivity final : public Activity {
   void enterInstaller();
   void leaveInstaller();
   void serviceInstaller();
-  void acceptInstallerPacket(const ble_terminal::BleTerminalTransport::IncomingPacket& packet);
+  void acceptInstallerPacket(const pagewire::PageWireTransport::IncomingPacket& packet);
   void failInstall(uint32_t errorCode);
-  void queueStatus(crosspoint_plugin::UpdateStatusV3 status, uint32_t value);
+  void queueStatus(UpdateStatus status, uint32_t value);
   void formatInstallStatus(char* buffer, size_t capacity) const;
 };

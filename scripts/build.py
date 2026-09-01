@@ -17,10 +17,10 @@ import zipfile
 from pathlib import Path
 
 
-ABI_VERSION = 3
+ABI_VERSION = 4
 TRAILER_FORMAT = 1
 TRAILER_MAGIC = b"X4PLUG01"
-DEFAULT_ENVIRONMENT = "x4pro-ble-terminal"
+DEFAULT_ENVIRONMENT = "x4pro"
 LINKER_SCRIPT = Path(__file__).resolve().parents[1] / "linker" / "plugin_sections.ld"
 
 
@@ -315,10 +315,12 @@ def main() -> int:
         "manager": [
             project / "src" / "manager" / "PluginManagerEntry.cpp",
             project / "src" / "manager" / "PluginsActivity.cpp",
+            project / "src" / "pagewire" / "PageWireProtocol.cpp",
         ],
         "terminal": [
             project / "src" / "terminal" / "TerminalPluginEntry.cpp",
             project / "src" / "terminal" / "BleTerminalActivity.cpp",
+            project / "src" / "pagewire" / "PageWireProtocol.cpp",
         ],
     }
 

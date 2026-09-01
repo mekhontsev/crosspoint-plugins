@@ -9,7 +9,7 @@ class MappedInputManager;
 
 namespace crosspoint_plugin {
 
-constexpr uint32_t ABI_VERSION = 3;
+constexpr uint32_t ABI_VERSION = 4;
 constexpr char TERMINAL_MODULE[] = "terminal";
 constexpr char CREATE_SYMBOL[] = "crosspoint_plugin_create";
 constexpr char ABI_SYMBOL[] = "crosspoint_plugin_abi";
@@ -34,7 +34,9 @@ struct PluginInfoV3 {
   PluginDescriptorV3 descriptor{};
 };
 
-enum class UpdateStatusV3 : uint8_t { READY = 1, COMPLETE = 2, ERROR = 3 };
+enum class PluginBleStatusV4 : uint8_t { STOPPED, STARTING, ADVERTISING, PAIRING, CONNECTED, ERROR };
+
+constexpr size_t PLUGIN_BLE_MAX_PACKET_BYTES = 244;
 
 constexpr uint32_t KEYBOARD_FLAG_HEADER_TOGGLE = 1U << 0U;
 constexpr uint32_t KEYBOARD_FLAG_SYSTEM_LANGUAGE = 1U << 1U;
@@ -48,12 +50,20 @@ extern "C" uint8_t crosspoint_plugin_open_text_keyboard_v2(const char* title, si
                                                            GfxRenderer* renderer, MappedInputManager* mappedInput);
 extern "C" uint8_t crosspoint_plugin_take_text_keyboard_result_v2(char* text, size_t capacity, size_t* length,
                                                                   uint8_t* cancelled);
-extern "C" uint8_t crosspoint_plugin_send_terminal_command_v2(const char* text, size_t length);
 extern "C" size_t crosspoint_plugin_list_v3(crosspoint_plugin::PluginInfoV3* modules, size_t capacity);
 extern "C" uint8_t crosspoint_plugin_install_begin_v3(const char* module, uint32_t bytes,
                                                       const uint8_t sha256[crosspoint_plugin::SHA256_BYTES]);
 extern "C" uint8_t crosspoint_plugin_install_write_v3(uint32_t offset, const uint8_t* data, size_t length);
 extern "C" uint8_t crosspoint_plugin_install_finish_v3();
 extern "C" void crosspoint_plugin_install_abort_v3();
-extern "C" uint8_t crosspoint_plugin_send_update_hello_v3();
-extern "C" uint8_t crosspoint_plugin_send_update_status_v3(crosspoint_plugin::UpdateStatusV3 status, uint32_t value);
+extern "C" uint8_t crosspoint_plugin_ble_start_v4();
+extern "C" void crosspoint_plugin_ble_stop_v4();
+extern "C" uint8_t crosspoint_plugin_ble_poll_v4(uint8_t* packet, size_t capacity, size_t* length);
+extern "C" uint8_t crosspoint_plugin_ble_send_v4(const uint8_t* packet, size_t length);
+extern "C" uint8_t crosspoint_plugin_ble_ready_v4();
+extern "C" size_t crosspoint_plugin_ble_max_packet_bytes_v4();
+extern "C" void crosspoint_plugin_ble_set_transfer_active_v4(uint8_t active);
+extern "C" crosspoint_plugin::PluginBleStatusV4 crosspoint_plugin_ble_status_v4();
+extern "C" uint32_t crosspoint_plugin_ble_status_revision_v4();
+extern "C" uint32_t crosspoint_plugin_ble_dropped_packets_v4();
+extern "C" uint32_t crosspoint_plugin_ble_pairing_passkey_v4();

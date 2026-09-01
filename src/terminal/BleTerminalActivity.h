@@ -10,8 +10,8 @@
 #include <cstdint>
 
 #include "activities/Activity.h"
-#include "ble/BleTerminalProtocol.h"
-#include "ble/BleTerminalTransport.h"
+#include "pagewire/PageWireProtocol.h"
+#include "pagewire/PageWireTransport.h"
 
 class BleTerminalActivity final : public Activity {
  public:
@@ -29,50 +29,52 @@ class BleTerminalActivity final : public Activity {
   static constexpr uint32_t DATA_KEEP_AWAKE_MS = 5000;
   static constexpr uint32_t TRANSFER_IDLE_MS = 5000;
   static constexpr size_t DISPLAY_LINE_BYTES = 256;
-  static constexpr size_t FRAME_CACHE_SLOTS = 4;
+  static constexpr size_t DOCUMENT_CAPACITY_BYTES = 12 * 1024;
 
-  struct CachedFrame {
-    std::array<char, ble_terminal::MAX_FRAME_BYTES + 1> text{};
-    uint32_t id = 0;
-    size_t length = 0;
-    bool occupied = false;
-    bool latest = false;
-  };
-
-  ble_terminal::BleTerminalTransport& transport_;
-  std::array<CachedFrame, FRAME_CACHE_SLOTS> frames_{};
-  std::array<char, ble_terminal::MAX_FRAME_BYTES + 1> stagingFrame_{};
+  pagewire::PageWireTransport& transport_;
+  std::array<char, DOCUMENT_CAPACITY_BYTES + 1> document_{};
+  std::array<char, DOCUMENT_CAPACITY_BYTES + 1> stagingDocument_{};
   std::array<char, DISPLAY_LINE_BYTES> displayLine_{};
-  ble_terminal::TextFrameReceiver receiver_;
-  StaticSemaphore_t frameMutexStorage_{};
-  SemaphoreHandle_t frameMutex_ = nullptr;
+  pagewire::DocumentReceiver receiver_;
+  StaticSemaphore_t documentMutexStorage_{};
+  SemaphoreHandle_t documentMutex_ = nullptr;
+
+  uint32_t generation_ = 0;
+  uint32_t revision_ = 0;
+  uint32_t windowStart_ = 0;
+  uint32_t documentLength_ = 0;
+  size_t documentBytes_ = 0;
+  size_t viewStart_ = 0;
+  size_t viewEnd_ = 0;
 
   uint32_t observedStatusRevision_ = 0;
-  uint32_t pendingStatusFrameId_ = 0;
+  uint32_t pendingStatusGeneration_ = 0;
+  uint32_t pendingStatusRevision_ = 0;
+  uint32_t pendingRequestGeneration_ = 0;
+  uint32_t pendingRequestRevision_ = 0;
   uint32_t pendingRequestAnchor_ = 0;
-  uint32_t readyAfterRenderFrameId_ = 0;
+  uint32_t readyAfterRenderGeneration_ = 0;
+  uint32_t readyAfterRenderRevision_ = 0;
   unsigned long lastPacketAt_ = 0;
   unsigned long lastTransferActivityAt_ = 0;
   unsigned long nextControlAttemptAt_ = 0;
-  int8_t selectedSlot_ = -1;
   uint8_t fontSizeIndex_ = 3;
-  ble_terminal::FrameStatus pendingFrameStatus_ = ble_terminal::FrameStatus::READY;
-  ble_terminal::FrameRequest pendingFrameRequest_ = ble_terminal::FrameRequest::CURRENT;
-  uint16_t pendingViewportColumns_ = 0;
-  uint16_t pendingViewportRows_ = 0;
+  pagewire::DocumentStatus pendingDocumentStatus_ = pagewire::DocumentStatus::READY;
+  pagewire::RangeRequest pendingRangeRequest_ = pagewire::RangeRequest::CURRENT;
+  int8_t pendingNavigation_ = 0;
   bool hasPendingStatus_ = false;
   bool hasPendingRequest_ = false;
-  bool hasPendingViewport_ = false;
-  bool initialFrameRequested_ = false;
+  bool helloPending_ = false;
+  bool initialDocumentRequested_ = false;
   bool needsReset_ = false;
   bool commandSendFailed_ = false;
-  std::array<char, ble_terminal::MAX_COMMAND_BYTES + 1> pendingCommand_{};
+  std::array<char, pagewire::MAX_COMMAND_BYTES + 1> pendingCommand_{};
   size_t pendingCommandLength_ = 0;
   bool pendingCommandReady_ = false;
   bool commandKeyboardRequested_ = false;
   bool commandKeyboardPending_ = false;
   bool followLatest_ = true;
-  bool cleanRequestedFrame_ = false;
+  bool latestDocument_ = false;
   bool cleanRefreshPending_ = false;
 
   void formatStatusText(char* buffer, size_t bufferSize) const;
@@ -81,16 +83,16 @@ class BleTerminalActivity final : public Activity {
   void serviceTransport(bool terminalVisible);
   int terminalFontId() const;
   void changeFontSize(int direction);
-  void navigateFrame(int direction);
+  void navigateDocument(int direction);
   void jumpToLatest();
-  void queueFrameRequest(ble_terminal::FrameRequest request, uint32_t anchorFrameId, bool cleanRefresh = false);
-  void queueViewportGeometry();
+  void queueRangeRequest(pagewire::RangeRequest request, uint32_t anchor, int8_t navigation = 0);
   void trySendPendingControl();
-  bool cacheCommittedFrame();
-  int findFrameSlot(uint32_t frameId) const;
-  int chooseFrameSlot(uint32_t frameId) const;
-  uint32_t selectedFrameId() const;
-  void clearFrameCache();
+  bool commitDocument();
+  void clearDocument();
+  size_t pageStartEndingAt(size_t end);
+  size_t pageEndStartingAt(size_t start);
+  int bodyWidth() const;
+  int visibleLineCount() const;
 };
 
 #endif
