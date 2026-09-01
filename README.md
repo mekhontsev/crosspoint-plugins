@@ -20,7 +20,9 @@ CrossPoint or Xteink release.
 
 See [Plugin Architecture](ARCHITECTURE.md) for the lazy-loading boundary,
 independent update paths, integrity checks, failure containment, and the small
-delta maintained against upstream firmware.
+delta maintained against upstream firmware. Authors should start with
+[Plugin Development](PLUGIN_DEVELOPMENT.md) for the module contract, available
+firmware services, BLE/PageWire access, build steps, and lifecycle rules.
 
 > [!NOTE]
 > This project is **AI vibe-coded**: implementation and documentation are

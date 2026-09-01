@@ -92,3 +92,7 @@ Compatibility is based on the explicit plugin ABI, not a firmware build ID.
 Firmware changes that preserve ABI 3 can continue using the same modules. An
 incompatible future host increments the ABI so old modules are rejected before
 execution.
+
+The concrete author-facing contract, including the firmware service allow-list
+and shared BLE/PageWire transport, is documented in
+[Plugin Development](PLUGIN_DEVELOPMENT.md).
