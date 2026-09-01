@@ -9,8 +9,8 @@ The complete system consists of:
 - [`crosspoint-reader`](https://github.com/mekhontsev/crosspoint-reader) — the
   firmware fork and plugin host;
 - this repository — the plugin sources and SD-card bundle;
-- [`x4-terminal-bridge`](https://github.com/mekhontsev/x4-terminal-bridge) —
-  the Android/Termux BLE bridge.
+- [`crosspoint-link`](https://github.com/mekhontsev/crosspoint-link) — the
+  Android/Termux client and protocol specification.
 
 See the firmware fork's
 [X4 Terminal user guide](https://github.com/mekhontsev/crosspoint-reader/blob/main/docs/x4-terminal-user-guide.md)
@@ -38,7 +38,7 @@ the reader's SD card. It creates:
 ```
 
 Once a compatible manager is installed, child plugins can also be updated over
-BLE: select the ZIP in X4 Terminal Bridge, then choose **Plugins > Install via
+BLE: select the ZIP in CrossPoint Link, then choose **Plugins > Install via
 Bluetooth** on the reader. `manager.so` deliberately remains an SD-card update
 so the updater cannot replace itself during a transfer.
 
