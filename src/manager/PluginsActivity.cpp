@@ -35,7 +35,8 @@ uint32_t readLe32(const uint8_t* data) {
 bool decodePacket(const ble_terminal::BleTerminalTransport::IncomingPacket& packet, ble_terminal::PacketType& type,
                   uint32_t& sequence, const uint8_t*& payload, size_t& payloadLength) {
   if (packet.length < ble_terminal::PACKET_HEADER_BYTES || packet.length > packet.bytes.size() ||
-      packet.bytes[0] != 'X' || packet.bytes[1] != 'T' || packet.bytes[2] != ble_terminal::PROTOCOL_VERSION) {
+      packet.bytes[0] != ble_terminal::MAGIC_0 || packet.bytes[1] != ble_terminal::MAGIC_1 ||
+      packet.bytes[2] != ble_terminal::PROTOCOL_VERSION) {
     return false;
   }
   payloadLength = readLe16(packet.bytes.data() + 8);
