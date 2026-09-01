@@ -109,6 +109,18 @@ other authors do not need PageWire.
 
 ## Build and install
 
+Terminal embeds nine generated sizes of IBM Plex Mono. Regenerate them from
+the font's complete Unicode cmap with the sibling firmware checkout's EpdFont
+converter:
+
+```sh
+python3 -m pip install -r ../crosspoint-reader/lib/EpdFont/scripts/requirements.txt
+python3 scripts/generate-terminal-fonts.py
+```
+
+This is a development-time step only. The generated headers are committed, so
+normal plugin builds do not need the TTF or Python font tooling.
+
 1. Add sources under `src/<module>/`.
 2. Add the module to the `sources` map in `scripts/build.py`.
 3. Put reusable plugin-owned headers under `include/`.
