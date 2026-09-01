@@ -18,6 +18,10 @@ for installation, controls, recovery, and current limitations. This software
 is experimental, supports the **Xteink X4 Pro only**, and is not an official
 CrossPoint or Xteink release.
 
+See [Plugin Architecture](ARCHITECTURE.md) for the lazy-loading boundary,
+independent update paths, integrity checks, failure containment, and the small
+delta maintained against upstream firmware.
+
 The current bundle contains:
 
 - `manager.so` — the lazily loaded **Plugins** menu;
