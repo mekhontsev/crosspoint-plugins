@@ -12,15 +12,20 @@ The complete system consists of:
 - [`crosspoint-link`](https://github.com/mekhontsev/crosspoint-link) — the
   Android/Termux client and protocol specification.
 
-See the firmware fork's
-[X4 Terminal user guide](https://github.com/mekhontsev/crosspoint-reader/blob/main/docs/x4-terminal-user-guide.md)
-for installation, controls, recovery, and current limitations. This software
-is experimental, supports the **Xteink X4 Pro only**, and is not an official
+See the shared
+[CrossPoint Link and X4 Terminal user guide](https://github.com/mekhontsev/crosspoint-link/blob/main/docs/user-guide.md)
+for installation, controls, recovery, and current limitations. This software is
+experimental, supports the **Xteink X4 Pro only**, and is not an official
 CrossPoint or Xteink release.
 
 See [Plugin Architecture](ARCHITECTURE.md) for the lazy-loading boundary,
 independent update paths, integrity checks, failure containment, and the small
 delta maintained against upstream firmware.
+
+> [!NOTE]
+> This project is **AI vibe-coded**: implementation and documentation are
+> developed with AI coding agents under maintainer direction, review, builds,
+> and hardware testing.
 
 The current bundle contains:
 
