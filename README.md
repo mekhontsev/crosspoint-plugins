@@ -9,11 +9,11 @@ The complete system consists of:
 - [`crosspoint-reader`](https://github.com/mekhontsev/crosspoint-reader) — the
   firmware fork and plugin host;
 - this repository — the plugin sources and SD-card bundle;
-- [`crosspoint-link`](https://github.com/mekhontsev/crosspoint-link) — the
+- [`pagewire`](https://github.com/mekhontsev/pagewire) — the
   Android/Termux client and protocol specification.
 
 See the shared
-[CrossPoint Link and X4 Terminal user guide](https://github.com/mekhontsev/crosspoint-link/blob/main/docs/user-guide.md)
+[PageWire and X4 Terminal user guide](https://github.com/mekhontsev/pagewire/blob/main/docs/user-guide.md)
 for installation, controls, recovery, and current limitations. This software is
 experimental, supports the **Xteink X4 Pro only**, and is not an official
 CrossPoint or Xteink release.
@@ -47,7 +47,7 @@ the reader's SD card. It creates:
 ```
 
 Once a compatible manager is installed, child plugins can also be updated over
-BLE: select the ZIP in CrossPoint Link, then choose **Plugins > Install via
+BLE: select the ZIP in PageWire, then choose **Plugins > Install via
 Bluetooth** on the reader. `manager.so` deliberately remains an SD-card update
 so the updater cannot replace itself during a transfer.
 

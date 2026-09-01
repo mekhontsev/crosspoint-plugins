@@ -18,9 +18,9 @@ firmware: Plugins entry + loader + host ABI + BLE transport
           ▼
 manager.so ── discovers child metadata ──> terminal.so, future child .so files
           ▲
-          │ authenticated CrossPoint Link Protocol
+          │ authenticated PageWire Protocol
           │
-CrossPoint Link client ── validates crosspoint-plugins.zip
+PageWire client ── validates crosspoint-plugins.zip
 ```
 
 The firmware does not contain a catalog of plugin names or UI strings. It knows
@@ -46,15 +46,15 @@ upstream UI do not pass through plugin code.
 | Firmware host and plugin ABI | Normal X4 Pro firmware update | Yes |
 | `manager.so` | SD card or Wi-Fi file transfer | No |
 | Child plugins such as `terminal.so` | SD card, Wi-Fi, or authenticated BLE | No |
-| CrossPoint Link client | Normal application update | No |
+| PageWire client | Normal application update | No |
 
 The first manager installation must be copied to `/plugins/manager.so`. Once it
 is present, **Install via Bluetooth** accepts compatible child modules from
-CrossPoint Link. The updater creates `/plugins` if necessary, but deliberately
+PageWire. The updater creates `/plugins` if necessary, but deliberately
 cannot replace `manager.so` while that manager is running.
 
 Each build produces a ZIP manifest containing the bundle version, plugin ABI,
-module sizes, SHA-256 digests, and BLE-update policy. CrossPoint Link validates
+module sizes, SHA-256 digests, and BLE-update policy. PageWire validates
 the manifest before transfer. The reader then independently validates the
 received size and digest, embedded trailer, ABI, ELF structure, and plugin
 metadata before listing or loading the module. An interrupted direct transfer
