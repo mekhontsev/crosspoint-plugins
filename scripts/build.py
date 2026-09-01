@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 
 
-ABI_VERSION = 2
+ABI_VERSION = 3
 TRAILER_FORMAT = 1
 TRAILER_MAGIC = b"X4PLUG01"
 DEFAULT_ENVIRONMENT = "x4pro-ble-terminal"
@@ -151,6 +151,7 @@ def link_module(
     objects: list[Path],
     destination: Path,
     allowed: set[str],
+    require_metadata: bool,
 ) -> None:
     raw = destination.with_suffix(".raw.so")
     run(
@@ -204,11 +205,15 @@ def link_module(
     for symbol in ("crosspoint_plugin_abi", "crosspoint_plugin_create"):
         if symbol not in exports:
             raise SystemExit(f"required export is missing from {destination.name}: {symbol}")
-
     section_table = quiet_output(
         [str(readelf), "--sections", "--wide", str(destination)]
     )
     section_names = set(re.findall(r"\]\s+(\.[^\s]+)", section_table))
+    if require_metadata and ".crosspoint.plugin" not in section_names:
+        raise SystemExit(
+            f"required metadata section is missing from {destination.name}: "
+            ".crosspoint.plugin"
+        )
     unsupported = section_names & {
         ".comment",
         ".dynamic",
@@ -257,7 +262,8 @@ def link_module(
 
 def create_bundle(modules: list[Path], destination: Path) -> None:
     manifest: dict[str, object] = {
-        "format": 1,
+        "format": 2,
+        "bundleVersion": "0.2.0",
         "pluginAbi": ABI_VERSION,
         "modules": {},
     }
@@ -267,18 +273,20 @@ def create_bundle(modules: list[Path], destination: Path) -> None:
         module_manifest[module.name] = {
             "bytes": len(contents),
             "sha256": hashlib.sha256(contents).hexdigest(),
+            "pluginAbi": ABI_VERSION,
+            "bleUpdatable": module.name != "manager.so",
         }
 
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for module in modules:
-            archive.write(module, f"apps/crosspoint-plugins/{module.name}")
+            archive.write(module, f"plugins/{module.name}")
         archive.writestr(
-            "apps/crosspoint-plugins/bundle.json",
+            "plugins/bundle.json",
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         )
         archive.writestr(
             "README.txt",
-            "Extract this archive into the root of the X4 Pro SD card.\n"
+            "Extract the plugins folder into the root of the X4 Pro SD card.\n"
             "The installed firmware must support the package's plugin ABI.\n",
         )
 
@@ -322,7 +330,7 @@ def main() -> int:
             compile_source(template, source, object_path, project / "include", firmware)
             objects.append(object_path)
         module = output_dir / f"{module_name}.so"
-        link_module(compiler, objects, module, allowed)
+        link_module(compiler, objects, module, allowed, module_name != "manager")
         modules.append(module)
 
     bundle = output_dir / "crosspoint-plugins.zip"

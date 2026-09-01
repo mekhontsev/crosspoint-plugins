@@ -15,5 +15,12 @@ static constexpr char BLE_RESYNC[] =
     "Some terminal data was rejected. Waiting "
     "for the client to resynchronize...";
 static constexpr char COMMAND_SEND_FAILED[] = "Command was not sent. Check the Bluetooth connection and try again.";
+static constexpr char INSTALL_BLUETOOTH[] = "Install via Bluetooth";
+static constexpr char INSTALL_STARTING[] = "Starting Bluetooth...";
+static constexpr char INSTALL_WAITING[] = "Waiting for a Bluetooth client...";
+static constexpr char INSTALL_CONNECTED[] = "Connected. Waiting for a plugin package...";
+static constexpr char INSTALLING[] = "Installing %s: %lu / %lu bytes";
+static constexpr char INSTALL_COMPLETE[] = "Installed %s";
+static constexpr char INSTALL_FAILED[] = "Plugin installation failed. Retry from the client.";
 
 }  // namespace crosspoint_plugin_strings

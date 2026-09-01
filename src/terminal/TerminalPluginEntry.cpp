@@ -12,10 +12,12 @@
 #include <builtinFonts/terminalmono_24_regular.h>
 #include <builtinFonts/terminalmono_8_regular.h>
 #include <crosspoint/PluginAbi.h>
+#include <crosspoint/PluginStrings.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <new>
 
 #include "BleTerminalActivity.h"
@@ -74,6 +76,14 @@ void releaseTerminalPluginFonts(GfxRenderer& renderer) { unregisterFonts(rendere
 extern "C" __attribute__((visibility("default"))) uint32_t crosspoint_plugin_abi() {
   return crosspoint_plugin::ABI_VERSION;
 }
+
+extern "C" __attribute__((used, section(".crosspoint.plugin"), visibility("default")))
+const crosspoint_plugin::PluginDescriptorV3 crosspoint_plugin_metadata_v3 = {
+    "Terminal",
+    "0.2.0",
+    10,
+    0,
+};
 
 extern "C" __attribute__((visibility("default"))) Activity* crosspoint_plugin_create(GfxRenderer* renderer,
                                                                                      MappedInputManager* mappedInput) {

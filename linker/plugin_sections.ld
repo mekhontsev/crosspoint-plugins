@@ -5,6 +5,12 @@
  */
 SECTIONS
 {
+  /* Read by the firmware without loading or executing the plugin. */
+  .crosspoint.plugin ALIGN(4) :
+  {
+    KEEP(*(.crosspoint.plugin))
+  }
+
   .rodata ALIGN(4) :
   {
     *(.rodata .rodata.*)
