@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 
 
-ABI_VERSION = 4
+ABI_VERSION = 5
 TRAILER_FORMAT = 1
 TRAILER_MAGIC = b"X4PLUG01"
 DEFAULT_ENVIRONMENT = "x4pro"
@@ -54,6 +54,8 @@ def load_compile_template(firmware: Path, environment: str) -> list[str]:
     build_marker = f".pio/build/{environment}/"
 
     def find_template() -> list[str] | None:
+        if not compile_config_is_current(database, firmware):
+            return None
         try:
             entries = json.loads(database.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -69,7 +71,9 @@ def load_compile_template(firmware: Path, environment: str) -> list[str]:
             file_name = str(entry.get("file", "")).replace("\\", "/")
             command_text = " ".join(str(value) for value in command)
             if file_name.endswith("src/activities/Activity.cpp") and build_marker in command_text:
-                return [str(value) for value in command]
+                arguments = [str(value) for value in command]
+                if template_headers_available(arguments, firmware):
+                    return arguments
         return None
 
     template = find_template()
@@ -82,6 +86,31 @@ def load_compile_template(firmware: Path, environment: str) -> list[str]:
     raise SystemExit(
         f"{database} has no {environment} compile command; run "
         f"pio run -e {environment} -t compiledb in the firmware tree"
+    )
+
+
+def compile_config_is_current(database: Path, firmware: Path) -> bool:
+    """Do not reuse flags from before a firmware configuration change."""
+    if not database.is_file():
+        return False
+    timestamp = database.stat().st_mtime_ns
+    return all(
+        not path.is_file() or path.stat().st_mtime_ns <= timestamp
+        for path in firmware.glob("platformio*.ini")
+    )
+
+
+def template_headers_available(arguments: list[str], firmware: Path) -> bool:
+    """Reject a cached compile database whose SDK include paths have moved."""
+    directories: list[Path] = []
+    for index, argument in enumerate(arguments):
+        if argument == "-I" and index + 1 < len(arguments):
+            directories.append(firmware / arguments[index + 1])
+        elif argument.startswith("-I") and len(argument) > 2:
+            directories.append(firmware / argument[2:])
+    return all(
+        any((directory / header).is_file() for directory in directories)
+        for header in ("Arduino.h", "GfxRenderer.h", "Bitmap.h")
     )
 
 
@@ -110,9 +139,7 @@ def compile_source(
         [
             "-fPIC",
             "-fvisibility=hidden",
-            "-DENABLE_BLE_TERMINAL=1",
             "-DENABLE_PLUGIN_BLE_HOST=1",
-            "-DCROSSPOINT_PLUGIN_BUILD=1",
             f"-I{include_dir}",
             "-o",
             str(destination),
@@ -202,7 +229,8 @@ def link_module(
     exports = quiet_output(
         [str(readelf), "--dyn-syms", "--wide", str(destination)]
     )
-    for symbol in ("crosspoint_plugin_abi", "crosspoint_plugin_create"):
+    entry = "crosspoint_plugin_request_v5" if destination.stem == "debugger" else "crosspoint_plugin_create"
+    for symbol in ("crosspoint_plugin_abi", entry):
         if symbol not in exports:
             raise SystemExit(f"required export is missing from {destination.name}: {symbol}")
     section_table = quiet_output(
@@ -312,6 +340,7 @@ def main() -> int:
     allowed = allowed_host_symbols(firmware)
 
     sources = {
+        "debugger": [project / "src" / "debugger" / "DebuggerPlugin.cpp"],
         "manager": [
             project / "src" / "manager" / "PluginManagerEntry.cpp",
             project / "src" / "manager" / "PluginsActivity.cpp",

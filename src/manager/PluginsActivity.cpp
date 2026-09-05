@@ -73,6 +73,10 @@ void PluginsActivity::onExit() {
 
 void PluginsActivity::refreshModules() {
   moduleCount_ = crosspoint_plugin_list_v3(modules_.data(), modules_.size());
+  const auto end = std::remove_if(modules_.begin(), modules_.begin() + moduleCount_, [](const auto& module) {
+    return (module.descriptor.flags & crosspoint_plugin::PLUGIN_FLAG_SERVICE) != 0;
+  });
+  moduleCount_ = static_cast<size_t>(end - modules_.begin());
   std::sort(modules_.begin(), modules_.begin() + moduleCount_, [](const auto& first, const auto& second) {
     if (first.descriptor.order != second.descriptor.order) return first.descriptor.order < second.descriptor.order;
     return std::strcmp(first.descriptor.title, second.descriptor.title) < 0;

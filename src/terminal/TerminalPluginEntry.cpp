@@ -1,5 +1,6 @@
 #include <EpdFont.h>
 #include <EpdFontFamily.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Memory.h>
 #include <builtinFonts/terminalmono_10_regular.h>
@@ -61,6 +62,9 @@ void registerFonts(GfxRenderer& renderer) {
 
 void unregisterFonts(GfxRenderer& renderer) {
   if (!fontState.initialized) return;
+  // Compressed glyph caches retain pointers into this module. Release them
+  // before its memory can be unloaded or reused by an updated font bundle.
+  if (auto* cache = renderer.getFontCacheManager()) cache->clearCache();
   for (size_t index = 0; index < FONT_DATA.size(); ++index) {
     renderer.removeFont(FONT_IDS[index]);
     familyAt(index)->~EpdFontFamily();

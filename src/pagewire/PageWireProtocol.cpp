@@ -217,6 +217,8 @@ void DocumentReceiver::clear() {
   expectedCrc_ = 0;
   generation_ = 0;
   revision_ = 0;
+  committedGeneration_ = 0;
+  committedRevision_ = 0;
   requestedBaseRevision_ = 0;
   windowStart_ = 0;
   documentLength_ = 0;

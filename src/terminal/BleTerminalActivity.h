@@ -1,11 +1,10 @@
 #pragma once
 
-#if defined(ENABLE_BLE_TERMINAL) && ENABLE_BLE_TERMINAL
-
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -28,11 +27,14 @@ class BleTerminalActivity final : public Activity {
  private:
   static constexpr uint32_t DATA_KEEP_AWAKE_MS = 5000;
   static constexpr uint32_t TRANSFER_IDLE_MS = 5000;
+  static constexpr uint32_t COMMAND_WAIT_MS = 10000;
   static constexpr size_t DISPLAY_LINE_BYTES = 256;
   static constexpr size_t DOCUMENT_CAPACITY_BYTES = 12 * 1024;
 
   pagewire::PageWireTransport& transport_;
   std::array<char, DOCUMENT_CAPACITY_BYTES + 1> document_{};
+  // Acknowledged delta base can advance while the displayed history stays frozen.
+  std::array<char, DOCUMENT_CAPACITY_BYTES + 1> baselineDocument_{};
   std::array<char, DOCUMENT_CAPACITY_BYTES + 1> stagingDocument_{};
   std::array<char, DISPLAY_LINE_BYTES> displayLine_{};
   pagewire::DocumentReceiver receiver_;
@@ -44,6 +46,7 @@ class BleTerminalActivity final : public Activity {
   uint32_t windowStart_ = 0;
   uint32_t documentLength_ = 0;
   size_t documentBytes_ = 0;
+  // Navigation belongs to the activity task; render only reads under the mutex.
   size_t viewStart_ = 0;
   size_t viewEnd_ = 0;
 
@@ -55,9 +58,12 @@ class BleTerminalActivity final : public Activity {
   uint32_t pendingRequestAnchor_ = 0;
   uint32_t readyAfterRenderGeneration_ = 0;
   uint32_t readyAfterRenderRevision_ = 0;
+  uint32_t renderedGeneration_ = 0;
+  uint32_t renderedRevision_ = 0;
   unsigned long lastPacketAt_ = 0;
   unsigned long lastTransferActivityAt_ = 0;
   unsigned long nextControlAttemptAt_ = 0;
+  unsigned long pendingCommandAt_ = 0;
   uint8_t fontSizeIndex_ = 3;
   pagewire::DocumentStatus pendingDocumentStatus_ = pagewire::DocumentStatus::READY;
   pagewire::RangeRequest pendingRangeRequest_ = pagewire::RangeRequest::CURRENT;
@@ -66,8 +72,8 @@ class BleTerminalActivity final : public Activity {
   bool hasPendingRequest_ = false;
   bool helloPending_ = false;
   bool initialDocumentRequested_ = false;
-  bool needsReset_ = false;
-  bool commandSendFailed_ = false;
+  std::atomic<bool> needsReset_{false};
+  std::atomic<bool> commandSendFailed_{false};
   std::array<char, pagewire::MAX_COMMAND_BYTES + 1> pendingCommand_{};
   size_t pendingCommandLength_ = 0;
   bool pendingCommandReady_ = false;
@@ -78,13 +84,15 @@ class BleTerminalActivity final : public Activity {
   bool cleanRefreshPending_ = false;
 
   void formatStatusText(char* buffer, size_t bufferSize) const;
+  static size_t stateRequest(void* context, const uint8_t* request, size_t length, uint8_t* response, size_t capacity);
   void openCommandKeyboard();
   void takeCommandKeyboardResult();
   void serviceTransport(bool terminalVisible);
   int terminalFontId() const;
-  void changeFontSize(int direction);
+  bool changeFontSize(int direction);
   void navigateDocument(int direction);
   void jumpToLatest();
+  void requestCleanRefresh();
   void queueRangeRequest(pagewire::RangeRequest request, uint32_t anchor, int8_t navigation = 0);
   void trySendPendingControl();
   bool commitDocument();
@@ -94,5 +102,3 @@ class BleTerminalActivity final : public Activity {
   int bodyWidth() const;
   int visibleLineCount() const;
 };
-
-#endif

@@ -8,7 +8,7 @@ The complete system is split across:
 
 - [`crosspoint-reader`](https://github.com/mekhontsev/crosspoint-reader): minimal
   firmware host and generic authenticated BLE service;
-- this repository: manager, updater, Terminal, plugin SDK headers, and bundle;
+- this repository: manager/updater, Terminal, background Debugger, SDK, and bundle;
 - [`pagewire`](https://github.com/mekhontsev/pagewire): protocol plus the
   Android/Termux companion.
 
@@ -22,29 +22,30 @@ for installation, updates, controls, and recovery. See
 > This project is **AI vibe-coded** under maintainer direction, review, builds,
 > and hardware testing.
 
-The current **0.2.0** bundle uses plugin ABI **4** and contains:
+The current **0.2.0** bundle uses plugin ABI **5** and contains:
 
 - `manager.so`: lazy Plugins menu and Bluetooth child updater;
 - `terminal.so`: PageWire v5 parser, continuous text cache, local layout,
-  keyboard integration, and Terminal fonts.
+  keyboard integration, persistent font size, and IBM Plex Mono fonts;
+- `debugger.so`: lazy background status, logs, read-only SD access, and
+  plugin-provided state/operations over the shared BLE connection.
 
 The manager discovers child `.so` modules dynamically from their embedded
 metadata. Neither manager nor firmware contains a hard-coded Terminal catalog.
+Debugger has no menu row: requests from the companion load it alongside the
+foreground plugin, using the same BLE connection.
 
 ## Install
 
-Extract `crosspoint-plugins.zip` and copy its `plugins` directory to the SD card
-root:
+Download the [v0.2.0 bundle](https://github.com/mekhontsev/crosspoint-plugins/releases/download/v0.2.0/crosspoint-plugins.zip)
+and follow the [shared reader installation guide](https://github.com/mekhontsev/pagewire/blob/main/docs/user-guide.md#install-the-reader).
+It requires matching ABI5 firmware.
 
-```text
-/plugins/manager.so
-/plugins/terminal.so
-/plugins/bundle.json
-```
-
-After the manager is present, compatible child plugins can also be streamed
-from a local ZIP using PageWire and **Plugins > Install via Bluetooth**.
-`manager.so` remains an SD/Wi-Fi update so the updater cannot replace itself.
+Compatible child modules, including Debugger, can be updated from a local ZIP
+over BLE. `manager.so` remains an SD/Wi-Fi update so the updater cannot replace
+itself. The SD `bundle.json` is not a plugin catalog: discovery and validation
+use embedded `.so` metadata. See the shared
+[update procedure](https://github.com/mekhontsev/pagewire/blob/main/docs/user-guide.md#update-child-plugins-over-ble).
 
 ## Build
 
@@ -61,9 +62,20 @@ allow-list; it does not build or link a firmware image.
 
 Output: `build/crosspoint-plugins.zip`.
 
+Host-side protocol checks (no reader required):
+
+```sh
+cmake -S tests -B build/tests
+cmake --build build/tests
+ctest --test-dir build/tests --output-on-failure
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
 Every module carries ABI, ELF length, SHA-256, and metadata. The loader validates
-them before listing/loading a child. Modules are relocated to PSRAM only when
-selected, and BLE starts only while an owning plugin activity is open.
+them before listing/loading a child. Activity modules are relocated to PSRAM
+on selection, service modules on request. BLE starts only while an owning
+plugin activity is open. These checks detect corruption and declared ABI
+mismatches; native plugins remain trusted code, not sandboxed processes.
 
 ## License
 
