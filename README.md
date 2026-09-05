@@ -35,6 +35,13 @@ metadata. Neither manager nor firmware contains a hard-coded Terminal catalog.
 Debugger has no menu row: requests from the companion load it alongside the
 foreground plugin, using the same BLE connection.
 
+## Terminal on X4 Pro
+
+<a href="docs/images/terminal-x4pro.jpg"><img src="docs/images/terminal-x4pro.jpg" alt="Photo of an Xteink X4 Pro showing a Codex CLI session in the Terminal plugin" width="360"></a>
+
+A photo of a tmux/Codex CLI session mirrored over Bluetooth to the SD-loaded
+Terminal plugin. Open the photo for the full-size view.
+
 ## Install
 
 Download the [v0.2.0 bundle](https://github.com/mekhontsev/crosspoint-plugins/releases/download/v0.2.0/crosspoint-plugins.zip)
